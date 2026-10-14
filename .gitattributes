@@ -1,0 +1,2 @@
+# Fin de línea LF en todo el repo (evita problemas con scripts dentro de Docker al clonar en Windows)
+* text=auto eol=lf

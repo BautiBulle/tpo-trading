@@ -1,0 +1,107 @@
+# Plataforma de trading - persistencia políglota
+# Levantar todo:   docker compose up -d
+# Ver estado:      docker compose ps
+# Borrar todo:     docker compose down -v   (borra también los datos)
+
+name: tpo-trading
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: tpo-postgres
+    environment:
+      POSTGRES_USER: ${PG_USER:-tpo}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-tpo}
+      POSTGRES_DB: ${PG_DB:-trading}
+      TZ: UTC
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Se ejecuta solo la primera vez (con el volumen vacío)
+      - ./init/postgres.sql:/docker-entrypoint-initdb.d/01_postgres.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-tpo} -d ${PG_DB:-trading}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    container_name: tpo-mongo
+    # Replica set de 1 nodo: habilita transacciones multi-documento si hicieran falta
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    # El healthcheck inicializa el replica set la primera vez y después solo verifica
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try { rs.status().ok } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]}).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  redis:
+    image: redis:7
+    container_name: tpo-redis
+    command: ["redis-server", "--appendonly", "yes"]   # AOF: no se pierde el precio vigente si se reinicia
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: tpo-cassandra
+    environment:
+      # Memoria acotada para que corra bien en una notebook
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+      CASSANDRA_CLUSTER_NAME: tpo
+    ports:
+      - "${CASSANDRA_PORT:-9042}:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s   # Cassandra tarda ~60 s en arrancar
+
+  # Contenedor de un solo uso: espera a Cassandra (reintentos cada 5 s) y crea keyspace + tablas
+  cassandra-init:
+    image: cassandra:4.1
+    container_name: tpo-cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./init/cassandra.cql:/init/cassandra.cql:ro
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        until cqlsh cassandra -e 'describe keyspaces' > /dev/null 2>&1; do
+          echo 'Esperando a Cassandra...'; sleep 5;
+        done
+        cqlsh cassandra -f /init/cassandra.cql && echo 'Cassandra inicializada OK'
+    restart: "no"
+
+volumes:
+  pg_data:
+  mongo_data:
+  redis_data:
+  cassandra_data:
