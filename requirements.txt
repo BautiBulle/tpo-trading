@@ -4,3 +4,4 @@ redis>=5.0
 cassandra-driver>=3.29.2
 faker>=30.0
 python-dotenv>=1.0
+pyasyncore; python_version >= "3.12"
