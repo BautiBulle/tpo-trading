@@ -184,3 +184,65 @@ def registrar_operacion(
     )
 
 
+def consultar_operaciones_usuario(
+    id_usuario: UUID,
+    desde: datetime,
+    hasta: datetime,
+    id_instrumento: str | None = None,
+) -> list[dict]:
+    """Consulta operaciones de un usuario por período e instrumento opcional."""
+
+    if desde.tzinfo is None or hasta.tzinfo is None:
+        raise ValueError("Las fechas deben incluir zona horaria")
+
+    desde = desde.astimezone(timezone.utc)
+    hasta = hasta.astimezone(timezone.utc)
+
+    if desde >= hasta:
+        raise ValueError("La fecha desde debe ser anterior a hasta")
+
+    sesion = get_cassandra()
+
+    consulta = sesion.prepare("""
+        SELECT id_usuario, mes, fecha_hora, id_operacion,
+               id_instrumento, tipo, cantidad, precio, importe
+        FROM operaciones_por_usuario
+        WHERE id_usuario = ?
+          AND mes = ?
+          AND fecha_hora >= ?
+          AND fecha_hora < ?
+    """)
+
+    resultados = []
+    mes_actual = desde.year * 12 + desde.month - 1
+    mes_final = hasta.year * 12 + hasta.month - 1
+
+    while mes_actual <= mes_final:
+        anio = mes_actual // 12
+        mes = mes_actual % 12 + 1
+        mes_texto = f"{anio:04d}-{mes:02d}"
+
+        filas = sesion.execute(
+            consulta,
+            (id_usuario, mes_texto, desde, hasta),
+        )
+
+        for fila in filas:
+            if id_instrumento is None or fila.id_instrumento == id_instrumento:
+                resultados.append({
+                    "id_operacion": fila.id_operacion,
+                    "id_usuario": fila.id_usuario,
+                    "id_instrumento": fila.id_instrumento,
+                    "fecha_hora": fila.fecha_hora,
+                    "tipo": fila.tipo,
+                    "cantidad": fila.cantidad,
+                    "precio": fila.precio,
+                    "importe": fila.importe,
+                })
+
+        mes_actual += 1
+
+    resultados.sort(key=lambda operacion: operacion["fecha_hora"])
+
+    return resultados
+
