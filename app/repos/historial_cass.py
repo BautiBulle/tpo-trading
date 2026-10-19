@@ -353,3 +353,50 @@ def registrar_auditoria(
             id_operador,
         ),
     )
+
+
+def consultar_auditoria(
+    id_instrumento: str,
+    desde: datetime,
+    hasta: datetime,
+) -> list[dict]:
+    """Consulta eventos de auditoría de un instrumento por período."""
+
+    if desde.tzinfo is None or hasta.tzinfo is None:
+        raise ValueError("Las fechas deben incluir zona horaria")
+
+    desde = desde.astimezone(timezone.utc)
+    hasta = hasta.astimezone(timezone.utc)
+
+    if desde >= hasta:
+        raise ValueError("La fecha desde debe ser anterior a hasta")
+
+    sesion = get_cassandra()
+
+    consulta = sesion.prepare("""
+        SELECT id_instrumento, fecha_hora, id_registro,
+               accion, motivo, id_operador
+        FROM auditoria_por_instrumento
+        WHERE id_instrumento = ?
+          AND fecha_hora >= ?
+          AND fecha_hora < ?
+    """)
+
+    filas = sesion.execute(
+        consulta,
+        (id_instrumento, desde, hasta),
+    )
+
+    resultados = []
+
+    for fila in filas:
+        resultados.append({
+            "id_instrumento": fila.id_instrumento,
+            "fecha_hora": fila.fecha_hora,
+            "id_registro": fila.id_registro,
+            "accion": fila.accion,
+            "motivo": fila.motivo,
+            "id_operador": fila.id_operador,
+        })
+
+    return resultados
