@@ -34,6 +34,81 @@ def test_integracion_guardar_y_consultar_precio():
 
 
 def test_integracion_actualizar_precio():
+    from datetime import timedelta
+
+    simbolo = f"TEST-{uuid4().hex}"
+    fecha = datetime(2026, 10, 19, 18, 30, tzinfo=timezone.utc)
+    cliente = get_redis()
+
+    try:
+        set_precio(
+            simbolo,
+            Decimal("100"),
+            Decimal("101"),
+            Decimal("100.50"),
+            fecha,
+        )
+
+        # La segunda cotización es un minuto más reciente.
+        set_precio(
+            simbolo,
+            Decimal("110"),
+            Decimal("111"),
+            Decimal("110.50"),
+            fecha + timedelta(minutes=1),
+        )
+
+        resultado = get_precio(simbolo)
+
+        assert resultado["ultimo"] == Decimal("110.50")
+        assert resultado["compra"] == Decimal("110")
+        assert resultado["fechaHora"] == fecha + timedelta(minutes=1)
+    finally:
+        cliente.delete(f"precio:{simbolo}")
+
+
+def test_integracion_precio_inexistente():
+    simbolo = f"TEST-{uuid4().hex}"
+
+    assert get_precio(simbolo) is None
+
+
+def test_integracion_precio_antiguo_no_sobrescribe():
+    """Una cotización anterior no debe reemplazar a una más reciente."""
+    from datetime import timedelta
+
+    simbolo = f"TEST-{uuid4().hex}"
+    fecha = datetime(2026, 10, 19, 18, 30, tzinfo=timezone.utc)
+    cliente = get_redis()
+
+    try:
+        set_precio(
+            simbolo,
+            Decimal("110"),
+            Decimal("111"),
+            Decimal("110.50"),
+            fecha,
+        )
+
+        # Llega tarde una cotización de cinco minutos antes.
+        set_precio(
+            simbolo,
+            Decimal("90"),
+            Decimal("91"),
+            Decimal("90.50"),
+            fecha - timedelta(minutes=5),
+        )
+
+        resultado = get_precio(simbolo)
+
+        assert resultado["ultimo"] == Decimal("110.50")
+        assert resultado["fechaHora"] == fecha
+    finally:
+        cliente.delete(f"precio:{simbolo}")
+
+
+def test_integracion_misma_fecha_no_sobrescribe():
+    """Dos actualizaciones con igual fecha conservan la primera."""
     simbolo = f"TEST-{uuid4().hex}"
     fecha = datetime(2026, 10, 19, 18, 30, tzinfo=timezone.utc)
     cliente = get_redis()
@@ -49,21 +124,16 @@ def test_integracion_actualizar_precio():
 
         set_precio(
             simbolo,
-            Decimal("110"),
-            Decimal("111"),
-            Decimal("110.50"),
+            Decimal("200"),
+            Decimal("201"),
+            Decimal("200.50"),
             fecha,
         )
 
         resultado = get_precio(simbolo)
 
-        assert resultado["ultimo"] == Decimal("110.50")
-        assert resultado["compra"] == Decimal("110")
+        assert resultado["ultimo"] == Decimal("100.50")
+        assert resultado["fechaHora"] == fecha
     finally:
         cliente.delete(f"precio:{simbolo}")
 
-
-def test_integracion_precio_inexistente():
-    simbolo = f"TEST-{uuid4().hex}"
-
-    assert get_precio(simbolo) is None
