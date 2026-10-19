@@ -246,3 +246,67 @@ def consultar_operaciones_usuario(
 
     return resultados
 
+
+def consultar_operaciones_instrumento(
+    id_instrumento: str,
+    desde: datetime,
+    hasta: datetime,
+) -> list[dict]:
+    """Consulta operaciones de un instrumento en un rango de fechas."""
+
+    if desde.tzinfo is None or hasta.tzinfo is None:
+        raise ValueError("Las fechas deben incluir zona horaria")
+
+    desde = desde.astimezone(timezone.utc)
+    hasta = hasta.astimezone(timezone.utc)
+
+    if desde >= hasta:
+        raise ValueError("La fecha desde debe ser anterior a hasta")
+
+    sesion = get_cassandra()
+
+    consulta = sesion.prepare("""
+        SELECT id_instrumento, fecha_hora, id_operacion,
+               id_usuario, tipo, cantidad, precio
+        FROM operaciones_por_instrumento
+        WHERE id_instrumento = ?
+          AND dia = ?
+          AND fecha_hora >= ?
+          AND fecha_hora < ?
+    """)
+
+    resultados = []
+    dia_actual = desde.date()
+
+    while dia_actual <= hasta.date():
+        inicio_dia = datetime.combine(
+            dia_actual, datetime.min.time(), tzinfo=timezone.utc
+        )
+        fin_dia = inicio_dia + timedelta(days=1)
+
+        inicio = max(desde, inicio_dia)
+        fin = min(hasta, fin_dia)
+
+        if inicio < fin:
+            filas = sesion.execute(
+                consulta,
+                (id_instrumento, dia_actual, inicio, fin),
+            )
+
+            for fila in filas:
+                resultados.append({
+                    "id_operacion": fila.id_operacion,
+                    "id_instrumento": fila.id_instrumento,
+                    "id_usuario": fila.id_usuario,
+                    "fecha_hora": fila.fecha_hora,
+                    "tipo": fila.tipo,
+                    "cantidad": fila.cantidad,
+                    "precio": fila.precio,
+                })
+
+        dia_actual += timedelta(days=1)
+
+    resultados.sort(key=lambda operacion: operacion["fecha_hora"])
+
+    return resultados
+
