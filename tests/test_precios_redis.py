@@ -1,6 +1,6 @@
 """Pruebas unitarias del repositorio Redis."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -12,27 +12,44 @@ from app.repos.precios_redis import get_precio, set_precio
 FECHA = datetime(2026, 10, 19, 18, 30, tzinfo=timezone.utc)
 
 
-def test_set_precio_guarda_hash():
-    cliente = MagicMock()
-
+def guardar_precio(cliente, fecha=FECHA):
     with patch("app.repos.precios_redis.get_redis", return_value=cliente):
         set_precio(
             "AAPL",
             Decimal("185.50"),
             Decimal("185.80"),
             Decimal("185.65"),
-            FECHA,
+            fecha,
         )
 
-    cliente.hset.assert_called_once_with(
-        "precio:AAPL",
-        mapping={
-            "compra": "185.50",
-            "venta": "185.80",
-            "ultimo": "185.65",
-            "fechaHora": "2026-10-19T18:30:00+00:00",
-        },
+
+def test_set_precio_guarda_hash():
+    cliente = MagicMock()
+    guardar_precio(cliente)
+
+    cliente.eval.assert_called_once()
+
+    argumentos = cliente.eval.call_args.args
+    assert argumentos[1] == 1
+    assert argumentos[2] == "precio:AAPL"
+    assert argumentos[4:] == (
+        "185.50",
+        "185.80",
+        "185.65",
+        "2026-10-19T18:30:00+00:00",
     )
+
+
+def test_set_precio_utiliza_actualizacion_atomica():
+    cliente = MagicMock()
+    guardar_precio(cliente)
+
+    script = cliente.eval.call_args.args[0]
+
+    assert "HGET" in script
+    assert "HSET" in script
+    assert "timestamp_ns" in script
+    cliente.hset.assert_not_called()
 
 
 def test_get_precio_recupera_cotizacion():
@@ -104,21 +121,36 @@ def test_rechazar_fecha_sin_zona_horaria():
 
 
 def test_normalizar_fecha_a_utc():
-    from datetime import timedelta
-
     cliente = MagicMock()
     zona = timezone(timedelta(hours=-3))
     fecha_local = datetime(2026, 10, 19, 15, 30, tzinfo=zona)
 
-    with patch("app.repos.precios_redis.get_redis", return_value=cliente):
-        set_precio(
-            "AAPL",
-            Decimal("100"),
-            Decimal("101"),
-            Decimal("100.50"),
-            fecha_local,
-        )
+    guardar_precio(cliente, fecha_local)
 
-    datos = cliente.hset.call_args.kwargs["mapping"]
+    argumentos = cliente.eval.call_args.args
+    assert argumentos[7] == "2026-10-19T18:30:00+00:00"
 
-    assert datos["fechaHora"] == "2026-10-19T18:30:00+00:00"
+
+def test_timestamp_mas_reciente_es_mayor():
+    cliente = MagicMock()
+
+    guardar_precio(cliente, FECHA)
+    anterior = cliente.eval.call_args.args[3]
+
+    guardar_precio(cliente, FECHA + timedelta(minutes=1))
+    posterior = cliente.eval.call_args.args[3]
+
+    assert posterior > anterior
+
+
+def test_timestamp_igual_para_mismo_instante():
+    cliente = MagicMock()
+    zona = timezone(timedelta(hours=-3))
+
+    guardar_precio(cliente, FECHA)
+    timestamp_utc = cliente.eval.call_args.args[3]
+
+    guardar_precio(cliente, FECHA.astimezone(zona))
+    timestamp_local = cliente.eval.call_args.args[3]
+
+    assert timestamp_utc == timestamp_local
