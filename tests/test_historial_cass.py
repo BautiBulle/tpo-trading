@@ -181,3 +181,27 @@ def test_rechazar_operacion_invalida(sesion_falsa):
         )
 
     sesion_falsa.execute.assert_not_called()
+
+
+def test_consultar_auditoria(sesion_falsa):
+    """Verifica la consulta de auditoría por instrumento y período."""
+
+    sesion_falsa.execute.return_value = []
+
+    desde = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    hasta = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+    resultado = historial_cass.consultar_auditoria(
+        "AAPL",
+        desde,
+        hasta,
+    )
+
+    assert resultado == []
+    sesion_falsa.execute.assert_called_once()
+
+    parametros = sesion_falsa.execute.call_args.args[1]
+
+    assert parametros[0] == "AAPL"
+    assert parametros[1] == desde
+    assert parametros[2] == hasta
