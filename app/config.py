@@ -48,10 +48,11 @@ def get_pg():
         _pg = psycopg.connect(
             host=PG_HOST, port=PG_PORT, user=PG_USER,
             password=PG_PASSWORD, dbname=PG_DB, connect_timeout=5,
+            autocommit=True,
         )
         with _pg.cursor() as cur:
             cur.execute("SET TIME ZONE 'UTC'")
-        _pg.commit()
+
     return _pg
 
 
