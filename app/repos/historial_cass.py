@@ -310,3 +310,46 @@ def consultar_operaciones_instrumento(
 
     return resultados
 
+
+def registrar_auditoria(
+    id_instrumento: str,
+    fecha_hora: datetime,
+    id_registro: UUID,
+    accion: str,
+    motivo: str,
+    id_operador: UUID,
+) -> None:
+    """Registra un evento de auditoría de un instrumento."""
+
+    if fecha_hora.tzinfo is None:
+        raise ValueError("fecha_hora debe incluir zona horaria")
+
+    fecha_hora = fecha_hora.astimezone(timezone.utc)
+
+    if not id_instrumento.strip():
+        raise ValueError("El instrumento es obligatorio")
+
+    if not accion.strip():
+        raise ValueError("La acción es obligatoria")
+
+    sesion = get_cassandra()
+
+    consulta = sesion.prepare("""
+        INSERT INTO auditoria_por_instrumento (
+            id_instrumento, fecha_hora, id_registro,
+            accion, motivo, id_operador
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+    """)
+
+    sesion.execute(
+        consulta,
+        (
+            id_instrumento,
+            fecha_hora,
+            id_registro,
+            accion,
+            motivo,
+            id_operador,
+        ),
+    )
