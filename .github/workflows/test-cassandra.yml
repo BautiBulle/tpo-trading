@@ -25,5 +25,43 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Ejecutar pruebas Cassandra
+      - name: Ejecutar pruebas unitarias
         run: python -m pytest tests/test_historial_cass.py -v
+
+      - name: Levantar Cassandra
+        run: docker compose up -d cassandra
+
+      - name: Esperar a Cassandra
+        run: |
+          for i in $(seq 1 60); do
+            if docker compose exec -T cassandra \
+              cqlsh -e "DESCRIBE KEYSPACES" > /dev/null 2>&1; then
+              echo "Cassandra disponible"
+              exit 0
+            fi
+            echo "Esperando Cassandra... intento $i"
+            sleep 5
+          done
+          echo "Cassandra no estuvo disponible a tiempo"
+          docker compose logs cassandra
+          exit 1
+
+      - name: Inicializar tablas
+        run: |
+          docker compose run --rm cassandra-init
+
+      - name: Ejecutar pruebas de integración
+        env:
+          RUN_CASSANDRA_INTEGRATION: "1"
+          CASSANDRA_HOST: localhost
+          CASSANDRA_PORT: "9042"
+          CASSANDRA_KEYSPACE: tpo_trading
+        run: python -m pytest tests/test_integracion_cassandra.py -v
+
+      - name: Mostrar logs si falla
+        if: failure()
+        run: docker compose logs cassandra
+
+      - name: Detener contenedores
+        if: always()
+        run: docker compose down
