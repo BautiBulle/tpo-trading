@@ -12,6 +12,21 @@ jobs:
   pruebas:
     runs-on: ubuntu-latest
 
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
@@ -29,3 +44,6 @@ jobs:
 
       - name: Ejecutar pruebas unitarias Redis
         run: python -m pytest tests/test_precios_redis.py -v
+
+      - name: Ejecutar pruebas de integración Redis
+        run: python -m pytest tests/test_integracion_redis.py -v
