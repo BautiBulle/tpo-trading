@@ -1,6 +1,6 @@
 """Repositorio Cassandra: cotizaciones históricas, operaciones y auditoría."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 from app.config import get_cassandra
@@ -53,3 +53,69 @@ def registrar_precio(
             volumen,
         ),
     )
+    
+
+def consultar_precios(
+    id_instrumento: str,
+    desde: datetime,
+    hasta: datetime,
+) -> list[dict]:
+    """Consulta cotizaciones históricas entre dos fechas, ordenadas de menor a mayor."""
+
+    if desde.tzinfo is None or hasta.tzinfo is None:
+        raise ValueError("Las fechas deben incluir zona horaria")
+
+    desde = desde.astimezone(timezone.utc)
+    hasta = hasta.astimezone(timezone.utc)
+
+    if desde >= hasta:
+        raise ValueError("La fecha desde debe ser anterior a hasta")
+
+    sesion = get_cassandra()
+
+    consulta = sesion.prepare("""
+        SELECT id_instrumento, fecha_hora,
+               precio_compra, precio_venta,
+               precio_ultimo, volumen
+        FROM historico_cotizacion
+        WHERE id_instrumento = ?
+          AND dia = ?
+          AND fecha_hora >= ?
+          AND fecha_hora < ?
+    """)
+
+    resultados = []
+    dia_actual = desde.date()
+
+    while dia_actual <= hasta.date():
+        # Limitamos la búsqueda al intervalo correspondiente a este día.
+        inicio_dia = datetime.combine(
+            dia_actual, datetime.min.time(), tzinfo=timezone.utc
+        )
+        fin_dia = inicio_dia + timedelta(days=1)
+
+        inicio = max(desde, inicio_dia)
+        fin = min(hasta, fin_dia)
+
+        if inicio < fin:
+            filas = sesion.execute(
+                consulta,
+                (id_instrumento, dia_actual, inicio, fin),
+            )
+
+            for fila in filas:
+                resultados.append({
+                    "id_instrumento": fila.id_instrumento,
+                    "fecha_hora": fila.fecha_hora,
+                    "precio_compra": fila.precio_compra,
+                    "precio_venta": fila.precio_venta,
+                    "precio_ultimo": fila.precio_ultimo,
+                    "volumen": fila.volumen,
+                })
+
+        dia_actual += timedelta(days=1)
+
+    resultados.sort(key=lambda registro: registro["fecha_hora"])
+
+    return resultados
+
