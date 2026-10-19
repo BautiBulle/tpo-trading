@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 from app.config import get_cassandra
 
@@ -118,4 +119,68 @@ def consultar_precios(
     resultados.sort(key=lambda registro: registro["fecha_hora"])
 
     return resultados
+
+
+def registrar_operacion(
+    id_operacion: UUID,
+    id_usuario: UUID,
+    id_instrumento: str,
+    fecha_hora: datetime,
+    tipo: str,
+    cantidad: Decimal,
+    precio: Decimal,
+) -> None:
+    """Registra una operación en las tablas por usuario y por instrumento."""
+
+    if fecha_hora.tzinfo is None:
+        raise ValueError("fecha_hora debe incluir zona horaria")
+
+    fecha_hora = fecha_hora.astimezone(timezone.utc)
+
+    if tipo not in ("COMPRA", "VENTA"):
+        raise ValueError("El tipo debe ser COMPRA o VENTA")
+
+    if cantidad <= 0 or precio <= 0:
+        raise ValueError("La cantidad y el precio deben ser positivos")
+
+    mes = fecha_hora.strftime("%Y-%m")
+    dia = fecha_hora.date()
+    importe = cantidad * precio
+
+    sesion = get_cassandra()
+
+    insertar_usuario = sesion.prepare("""
+        INSERT INTO operaciones_por_usuario (
+            id_usuario, mes, fecha_hora, id_operacion,
+            id_instrumento, tipo, cantidad, precio, importe
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """)
+
+    insertar_instrumento = sesion.prepare("""
+        INSERT INTO operaciones_por_instrumento (
+            id_instrumento, dia, fecha_hora, id_operacion,
+            id_usuario, tipo, cantidad, precio
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """)
+
+    # Primera escritura: historial consultable por usuario.
+    sesion.execute(
+        insertar_usuario,
+        (
+            id_usuario, mes, fecha_hora, id_operacion,
+            id_instrumento, tipo, cantidad, precio, importe,
+        ),
+    )
+
+    # Segunda escritura: historial consultable por instrumento.
+    sesion.execute(
+        insertar_instrumento,
+        (
+            id_instrumento, dia, fecha_hora, id_operacion,
+            id_usuario, tipo, cantidad, precio,
+        ),
+    )
+
 
