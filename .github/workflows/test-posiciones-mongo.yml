@@ -1,0 +1,133 @@
+name: Pruebas posiciones MongoDB
+
+on:
+  push:
+    branches:
+      - feature/problema-3
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  carga-inicial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Levantar las cuatro bases
+        run: docker compose up -d
+
+      - name: Esperar PostgreSQL MongoDB Redis y Cassandra
+        run: |
+          for i in {1..60}; do
+            ESTADO=$(docker compose ps --format json)
+            if echo "$ESTADO" | python -c '
+          import json, sys
+          servicios = {}
+          for linea in sys.stdin:
+              if linea.strip():
+                  s = json.loads(linea)
+                  servicios[s["Service"]] = s.get("Health", "")
+          esperados = ("postgres", "mongo", "redis", "cassandra")
+          sys.exit(0 if all(servicios.get(s) == "healthy" for s in esperados) else 1)
+          '; then
+              echo "Las cuatro bases estan disponibles"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "Tiempo de espera agotado"
+              docker compose ps
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Esperar inicializacion Cassandra
+        run: |
+          for i in {1..30}; do
+            ESTADO=$(docker inspect \
+              -f '{{.State.Status}} {{.State.ExitCode}}' \
+              tpo-cassandra-init)
+            if [ "$ESTADO" = "exited 0" ]; then
+              echo "Cassandra inicializada"
+              exit 0
+            fi
+            if echo "$ESTADO" | grep -q '^exited '; then
+              docker logs tpo-cassandra-init
+              exit 1
+            fi
+            sleep 5
+          done
+          docker logs tpo-cassandra-init
+          exit 1
+
+      - name: Inicializar indices MongoDB
+        run: python -m init.mongo_indexes
+
+      - name: Ejecutar carga inicial
+        run: python -m seed.cargar_datos
+
+      - name: Verificar registros MongoDB
+        run: |
+          python - <<'PY'
+          from app.config import get_mongo_db
+          db = get_mongo_db()
+          assert db.usuarios.count_documents({}) >= 1000
+          assert db.portafolios.count_documents({}) >= 1000
+          assert db.instrumentos.count_documents({}) >= 120
+          print("MongoDB: cantidades verificadas")
+          PY
+
+      - name: Verificar saldos PostgreSQL
+        run: |
+          python - <<'PY'
+          from app.config import get_pg
+          with get_pg().cursor() as cursor:
+              cursor.execute("SELECT COUNT(*) FROM saldo")
+              cantidad = cursor.fetchone()[0]
+          assert cantidad >= 1000, cantidad
+          print("PostgreSQL:", cantidad, "saldos")
+          PY
+
+      - name: Verificar precios Redis
+        run: |
+          python - <<'PY'
+          from app.repos.precios_redis import get_precio
+          assert get_precio("ACT001") is not None
+          assert get_precio("ACT120") is not None
+          print("Redis: precios iniciales verificados")
+          PY
+
+      - name: Verificar cotizaciones Cassandra
+        run: |
+          python - <<'PY'
+          from app.config import get_cassandra
+          sesion = get_cassandra()
+          filas = sesion.execute(
+              "SELECT COUNT(*) FROM historico_cotizacion"
+          )
+          cantidad = filas.one()[0]
+          assert cantidad >= 50000, cantidad
+          print("Cassandra:", cantidad, "cotizaciones")
+          PY
+
+      - name: Probar posiciones MongoDB
+        run: python -m pytest tests/test_posiciones_mongo.py -v
+
+      
+      - name: Mostrar logs si falla
+        if: failure()
+        run: docker compose logs --tail=80
