@@ -168,8 +168,9 @@ def cargar_redis():
     print("Redis: 120 cotizaciones actuales cargadas.")
 
 
+
 def cargar_cassandra():
-    """Carga cotizaciones históricas directamente en Cassandra."""
+    """Carga 50.000 cotizaciones históricas en Cassandra."""
     from app.config import get_cassandra_session
 
     print("Cargando Cassandra...")
@@ -178,10 +179,16 @@ def cargar_cassandra():
 
     consulta = sesion.prepare(
         """
-        INSERT INTO cotizacion_historica (
-            simbolo, fecha_hora, precio
+        INSERT INTO historico_cotizacion (
+            id_instrumento,
+            dia,
+            fecha_hora,
+            precio_compra,
+            precio_venta,
+            precio_ultimo,
+            volumen
         )
-        VALUES (?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """
     )
 
@@ -191,11 +198,27 @@ def cargar_cassandra():
     for numero in range(COTIZACIONES_HISTORICAS):
         simbolo = f"ACT{numero % INSTRUMENTOS + 1:03d}"
         fecha = inicio + timedelta(minutes=numero)
+
         precio = Decimal(
             str(round(generador.uniform(50, 500), 2))
         )
 
-        sesion.execute(consulta, (simbolo, fecha, precio))
+        precio_compra = precio - Decimal("0.50")
+        precio_venta = precio + Decimal("0.50")
+        volumen = generador.randint(100, 10000)
+
+        sesion.execute(
+            consulta,
+            (
+                simbolo,
+                fecha.date(),
+                fecha,
+                precio_compra,
+                precio_venta,
+                precio,
+                volumen,
+            ),
+        )
 
         if (numero + 1) % 10000 == 0:
             print(f"  {numero + 1} cotizaciones cargadas")
