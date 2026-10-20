@@ -135,6 +135,10 @@ jobs:
       - name: Probar reversion de consumo PostgreSQL
         run: python -m pytest tests/test_reversion_consumo_pg.py -v
 
+        
+      - name: Probar ejecuciones parciales MongoDB
+        run: python -m pytest tests/test_ejecuciones_mongo.py -v
+
       
       - name: Mostrar logs si falla
         if: failure()
