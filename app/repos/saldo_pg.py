@@ -1,7 +1,7 @@
 """Repositorio PostgreSQL: saldos y movimientos financieros ACID."""
 
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from app.config import get_pg
 
@@ -202,7 +202,8 @@ def _ejecutar_movimiento(
         return True
 
     except Exception:
-        conexion.rollback()
+        # transaction() ya revierte el movimiento. No hacer rollback() aquí:
+        # este movimiento también puede integrar una transacción exterior.
         raise
 
 
@@ -287,3 +288,85 @@ def revertir_consumo(id_portafolio, importe, id_operacion, id_orden):
         id_operacion,
         id_orden,
     )
+
+
+def liberar_reserva_orden(id_portafolio, id_orden, id_operacion):
+    """Libera la reserva restante de una orden y devuelve el importe.
+
+    Los movimientos son la fuente del importe, incluyendo consumos parciales
+    y sus reversiones. La lectura, liberación y registro son una transacción.
+    """
+    _validar_uuid(id_portafolio, "id_portafolio")
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_operacion, "id_operacion")
+    conexion = get_pg()
+
+    with conexion.transaction():
+        with conexion.cursor() as cur:
+            cur.execute(
+                "SELECT id_portafolio FROM saldo WHERE id_portafolio = %s FOR UPDATE",
+                (id_portafolio,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError("El portafolio no tiene saldo registrado")
+
+            cur.execute(
+                "SELECT importe, id_portafolio, id_orden FROM movimiento_saldo "
+                "WHERE id_operacion = %s AND tipo = 'LIBERACION'",
+                (id_operacion,),
+            )
+            anterior = cur.fetchone()
+            if anterior is not None:
+                if anterior[1:] != (id_portafolio, id_orden):
+                    raise ValueError("Liberación repetida con datos diferentes")
+                return anterior[0]
+
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(CASE
+                    WHEN tipo IN ('BLOQUEO', 'REVERSION_CONSUMO') THEN importe
+                    WHEN tipo IN ('CONSUMO', 'LIBERACION') THEN -importe
+                    ELSE 0
+                END), 0)
+                FROM movimiento_saldo
+                WHERE id_portafolio = %s AND id_orden = %s
+                """,
+                (id_portafolio, id_orden),
+            )
+            importe = cur.fetchone()[0]
+            if importe < 0:
+                raise ValueError("La reserva de la orden es inconsistente")
+
+        if importe > 0:
+            liberar(id_portafolio, importe, id_operacion, id_orden)
+
+    return importe
+
+
+def revertir_liberacion_orden(id_portafolio, id_orden, id_operacion):
+    """Vuelve a bloquear solo una liberación realmente confirmada por el P4."""
+    _validar_uuid(id_portafolio, "id_portafolio")
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_operacion, "id_operacion")
+    conexion = get_pg()
+
+    with conexion.transaction():
+        with conexion.cursor() as cur:
+            cur.execute(
+                "SELECT id_portafolio FROM saldo WHERE id_portafolio = %s FOR UPDATE",
+                (id_portafolio,),
+            )
+            cur.execute(
+                "SELECT importe, id_portafolio, id_orden FROM movimiento_saldo "
+                "WHERE id_operacion = %s AND tipo = 'LIBERACION'",
+                (id_operacion,),
+            )
+            liberacion = cur.fetchone()
+            if liberacion is None:
+                return False
+            if liberacion[1:] != (id_portafolio, id_orden):
+                raise ValueError("La liberación corresponde a otra orden")
+
+        # Un identificador estable evita duplicar la compensación.
+        id_compensacion = uuid5(id_operacion, "revertir-liberacion-orden")
+        return bloquear(id_portafolio, liberacion[0], id_compensacion, id_orden)

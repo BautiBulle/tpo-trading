@@ -8,6 +8,10 @@ from bson.decimal128 import Decimal128
 from pymongo import ReturnDocument
 
 from app.config import get_mongo_db
+from app.constantes import (
+    PARCIAL, PENDIENTE, PARCIALMENTE_EJECUTADA,
+    EN_CANCELACION, CANCELADA, VENCIDA,
+)
 
 
 COLECCIONES = (
@@ -581,3 +585,101 @@ def liberar_reserva_ejecucion(
 
     return resultado.modified_count == 1
 
+
+# ---------- Cancelación y vencimiento (P4) ----------
+
+def tomar_orden_para_cierre(
+    id_orden, id_cierre, estado_anterior, fecha_vencimiento=None
+):
+    """Toma una orden solo si no hay una ejecución reservada o en curso."""
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_cierre, "id_cierre")
+    if estado_anterior not in (PENDIENTE, PARCIALMENTE_EJECUTADA, PARCIAL):
+        raise ValueError("Estado no permitido para cerrar la orden")
+
+    filtro = {
+        "_id": str(id_orden),
+        "tipo": "COMPRA",
+        "estado": estado_anterior,
+        "reservasEjecucion.0": {"$exists": False},
+        "ejecucionEnCurso": {"$exists": False},
+    }
+    if fecha_vencimiento is not None:
+        filtro["fechaExpiracion"] = {"$ne": None, "$lte": fecha_vencimiento}
+
+    documento = get_mongo_db().ordenes.find_one_and_update(
+        filtro,
+        {"$set": {
+            "estado": EN_CANCELACION,
+            "idCierre": str(id_cierre),
+            "fechaActualizacion": _fecha_actual(),
+        }},
+        return_document=ReturnDocument.AFTER,
+    )
+    return _recuperar_documento(documento) if documento else None
+
+
+def finalizar_cierre_orden(id_orden, id_cierre, estado_orden, estado_saga):
+    """Confirma el cierre o su compensación junto con la saga en MongoDB."""
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_cierre, "id_cierre")
+    if not (
+        (estado_saga == "COMPLETADA" and estado_orden in (CANCELADA, VENCIDA))
+        or (estado_saga == "COMPENSADA" and estado_orden in (
+            PENDIENTE, PARCIALMENTE_EJECUTADA, PARCIAL
+        ))
+    ):
+        raise ValueError("Estados de cierre inválidos")
+
+    db = get_mongo_db()
+    fecha = _fecha_actual()
+    cambios = {"$set": {"estado": estado_orden, "fechaActualizacion": fecha}}
+    if estado_saga == "COMPENSADA":
+        cambios["$unset"] = {"idCierre": ""}
+
+    with db.client.start_session() as sesion:
+        with sesion.start_transaction():
+            documento = db.ordenes.find_one_and_update(
+                {"_id": str(id_orden), "estado": EN_CANCELACION,
+                 "idCierre": str(id_cierre)},
+                cambios,
+                return_document=ReturnDocument.AFTER,
+                session=sesion,
+            )
+            if documento is None:
+                raise ValueError("La orden ya no pertenece a este cierre")
+
+            resultado = db.sagas.update_one(
+                {"_id": str(id_cierre), "datos.idOrden": str(id_orden)},
+                {
+                    "$set": {"estado": estado_saga, "fechaActualizacion": fecha},
+                    "$push": {"pasos": {
+                        "paso": "CERRAR_ORDEN" if estado_saga == "COMPLETADA"
+                        else "RESTAURAR_ORDEN",
+                        "estado": "COMPLETADO",
+                        "detalle": {"estadoOrden": estado_orden},
+                        "fechaHora": fecha,
+                    }},
+                },
+                session=sesion,
+            )
+            if resultado.matched_count != 1:
+                raise ValueError("La saga del cierre no existe")
+
+    return _recuperar_documento(documento)
+
+
+def listar_ordenes_vencidas(fecha_actual):
+    """Busca compras pendientes o parciales con vencimiento alcanzado."""
+    if (
+        not isinstance(fecha_actual, datetime)
+        or fecha_actual.tzinfo is None
+        or fecha_actual.utcoffset() is None
+    ):
+        raise ValueError("fecha_actual debe incluir zona horaria")
+    cursor = get_mongo_db().ordenes.find({
+        "tipo": "COMPRA",
+        "estado": {"$in": [PENDIENTE, PARCIALMENTE_EJECUTADA, PARCIAL]},
+        "fechaExpiracion": {"$ne": None, "$lte": fecha_actual},
+    }).sort("fechaExpiracion", 1)
+    return [_recuperar_documento(orden) for orden in cursor]

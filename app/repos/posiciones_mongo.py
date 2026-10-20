@@ -31,6 +31,23 @@ def obtener_posicion(id_portafolio: UUID, id_instrumento: UUID):
     })
 
 
+def listar_posiciones_portafolio(id_portafolio: UUID) -> list[dict]:
+    """Lee las posiciones que escribe el P3 y convierte los importes a Decimal."""
+    _validar_uuid(id_portafolio, "id_portafolio")
+    documentos = get_mongo_db().posiciones.find({
+        "idPortafolio": str(id_portafolio),
+    }).sort("idInstrumento", 1)
+
+    posiciones = []
+    for documento in documentos:
+        posiciones.append({
+            "idInstrumento": documento["idInstrumento"],
+            "cantidad": documento["cantidad"].to_decimal(),
+            "precioPromedio": documento["precioPromedio"].to_decimal(),
+        })
+    return posiciones
+
+
 def aplicar_compra(
     id_portafolio: UUID,
     id_instrumento: UUID,

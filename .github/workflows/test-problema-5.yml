@@ -1,0 +1,46 @@
+name: Pruebas Problema 5
+
+on:
+  push:
+    branches:
+      - feature/problema-4
+      - feature/problema-5
+  pull_request:
+    branches:
+      - develop
+  workflow_dispatch:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements.txt
+
+      - name: Probar el cálculo del portafolio sin bases
+        run: python -m pytest tests/test_p5_valor_portafolio.py tests/test_precios_redis.py -v
+
+      - name: Levantar MongoDB y Redis
+        run: docker compose up -d --wait --wait-timeout 120 mongo redis
+
+      - name: Probar con posiciones y precios reales
+        env:
+          RUN_P5_INTEGRATION: "1"
+        run: python -m pytest tests/test_integracion_p5.py -v
+
+      - name: Mostrar logs si falla
+        if: failure()
+        run: docker compose logs --tail=80 mongo redis
+
+      - name: Detener contenedores
+        if: always()
+        run: docker compose down
