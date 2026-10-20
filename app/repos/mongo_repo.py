@@ -245,6 +245,7 @@ def crear_orden(
             "cantidad": cantidad,
             "precioLimite": precio_limite,
             "estado": "PENDIENTE",
+            "cantidadEjecutada": Decimal128(Decimal("0")),
             "fechaCreacion": _fecha_actual(),
             "fechaExpiracion": fecha_expiracion,
         },
@@ -347,3 +348,93 @@ def cambiar_estado_saga(id_saga, estado):
 
 def obtener_saga(id_saga):
     return buscar_documento("sagas", id_saga)
+
+
+def reservar_ejecucion_orden(
+    id_orden: UUID,
+    id_ejecucion: UUID,
+    cantidad: Decimal,
+):
+    """Reserva una cantidad para ejecutar, evitando sobre-ejecuciones.
+
+    La operación se realiza en una transacción MongoDB.
+    Requiere MongoDB replica set.
+    """
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_ejecucion, "id_ejecucion")
+    _validar_importe(cantidad, "cantidad")
+
+    if cantidad == 0:
+        raise ValueError("La cantidad debe ser positiva")
+
+    db = get_mongo_db()
+
+    with db.client.start_session() as sesion:
+        with sesion.start_transaction():
+            orden = db.ordenes.find_one(
+                {"_id": str(id_orden)},
+                session=sesion,
+            )
+
+            if orden is None:
+                raise ValueError("La orden no existe")
+
+            if orden["estado"] not in (
+                "PENDIENTE",
+                "PARCIALMENTE_EJECUTADA",
+            ):
+                raise ValueError("La orden no admite ejecuciones")
+
+            reservas = orden.get("reservasEjecucion", [])
+
+            for reserva in reservas:
+                if reserva["idEjecucion"] == str(id_ejecucion):
+                    if reserva["cantidad"].to_decimal() != cantidad:
+                        raise ValueError(
+                            "Ejecución repetida con cantidad diferente"
+                        )
+                    return False
+
+            ejecutada = orden.get(
+                "cantidadEjecutada",
+                Decimal128(Decimal("0")),
+            ).to_decimal()
+
+            reservada = sum(
+                (
+                    reserva["cantidad"].to_decimal()
+                    for reserva in reservas
+                ),
+                Decimal("0"),
+            )
+
+            total = orden["cantidad"].to_decimal()
+
+            if ejecutada + reservada + cantidad > total:
+                raise ValueError(
+                    "La ejecución supera la cantidad pendiente"
+                )
+
+            resultado = db.ordenes.update_one(
+                {"_id": str(id_orden)},
+                {
+                    "$push": {
+                        "reservasEjecucion": {
+                            "idEjecucion": str(id_ejecucion),
+                            "cantidad": Decimal128(cantidad),
+                        }
+                    },
+                    "$set": {
+                        "fechaActualizacion": _fecha_actual(),
+                    },
+                },
+                session=sesion,
+            )
+
+            if resultado.modified_count != 1:
+                raise RuntimeError(
+                    "No se pudo reservar la ejecución"
+                )
+
+    return True
+
