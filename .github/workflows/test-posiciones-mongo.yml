@@ -138,6 +138,10 @@ jobs:
         
       - name: Probar ejecuciones parciales MongoDB
         run: python -m pytest tests/test_ejecuciones_mongo.py -v
+        
+
+      - name: Probar integracion completa Problema 3
+        run: python -m pytest tests/test_integracion_p3.py -v
 
       
       - name: Mostrar logs si falla
