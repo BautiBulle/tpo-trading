@@ -91,7 +91,8 @@ def cargar_postgresql():
     """Deposita un saldo inicial por portafolio sin duplicarlo."""
     print("Cargando PostgreSQL...")
 
-    with get_pg() as conexion:
+    conexion = get_pg()
+    with conexion.transaction():
         with conexion.cursor() as cursor:
             for numero in range(USUARIOS):
                 portafolio_id = identificador("portafolio", numero)
@@ -171,11 +172,11 @@ def cargar_redis():
 
 def cargar_cassandra():
     """Carga 50.000 cotizaciones históricas en Cassandra."""
-    from app.config import get_cassandra_session
-
+    from app.config import get_cassandra
+    from cassandra.util import Date
     print("Cargando Cassandra...")
 
-    sesion = get_cassandra_session()
+    sesion = get_cassandra()
 
     consulta = sesion.prepare(
         """
@@ -211,7 +212,7 @@ def cargar_cassandra():
             consulta,
             (
                 simbolo,
-                fecha.date(),
+                Date(fecha.date()),
                 fecha,
                 precio_compra,
                 precio_venta,
