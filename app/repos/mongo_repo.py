@@ -298,7 +298,7 @@ def crear_saga(id_saga, tipo, datos=None):
             "_id": id_saga,
             "tipo": tipo,
             "estado": "INICIADA",
-            "datos": datos or {},
+            "datos": _preparar_documento(datos if datos is not None else {}),
             "pasos": [],
             "fechaCreacion": _fecha_actual(),
         },
