@@ -125,3 +125,90 @@ La integración utiliza una base MongoDB temporal y claves Redis con símbolos
 únicos. Elimina ambos al terminar. El flujo real P2 -> P3 -> P4 de
 `tests/test_integracion_p4.py` también verifica la valuación del P5 antes y
 después de cancelar la parte pendiente de una orden.
+
+## Problema 6: historial y rendimiento
+
+Implementación: `app/problemas/p6_historial.py`, según la sección 6 del plan de
+la Etapa 2. MongoDB verifica el usuario y resuelve el UUID del instrumento al
+símbolo que el P3 guarda en Cassandra. Cassandra aporta las operaciones por
+usuario y mes; el filtro opcional por instrumento se aplica a esos resultados.
+
+```python
+from datetime import datetime, timezone
+from app.problemas.p6_historial import (
+    consultar_historial, calcular_rendimiento_12_meses,
+)
+
+# id_usuario e id_instrumento deben ser UUID existentes en MongoDB.
+desde = datetime(2025, 10, 20, tzinfo=timezone.utc)
+hasta = datetime(2026, 10, 20, tzinfo=timezone.utc)
+operaciones = consultar_historial(id_usuario, desde, hasta)
+# Para consultar solamente un instrumento:
+# operaciones = consultar_historial(id_usuario, desde, hasta, id_instrumento)
+
+resultado = calcular_rendimiento_12_meses(id_usuario, fecha_actual=hasta)
+print(resultado["gananciaRealizada"])
+print(resultado["rendimientoPorcentual"])
+```
+
+El historial devuelve una lista ordenada por fecha con `idOperacion`, `idUsuario`,
+`simbolo`, `fechaHora`, `tipo`, `cantidad`, `precio` e `importe`. Las fechas de
+entrada requieren zona horaria y las de salida están en UTC. Los intervalos
+incluyen `desde` y excluyen `hasta`. Un historial vacío devuelve `[]`.
+Los instrumentos suspendidos conservan su historial.
+
+El PDF no fija una fórmula de rendimiento. Para esta implementación se eligió
+la **ganancia realizada en ventas**, usando costo promedio ponderado:
+
+```text
+costo promedio = costo acumulado de la tenencia / cantidad disponible
+costo vendido = cantidad vendida × costo promedio anterior a la venta
+ganancia realizada = importe de ventas del período − costo vendido del período
+rendimiento porcentual = ganancia realizada / costo vendido × 100
+```
+
+Ejemplo: comprar 10 unidades a 100 y 10 a 200 deja un costo promedio de 150.
+Vender 5 a 180 produce 900 de ingresos, 750 de costo y 150 de ganancia: 20 %.
+Las compras que siguen abiertas no son pérdidas y no se valoran en esta consulta.
+Si solo hay compras, la ganancia realizada es cero y el porcentaje es `None`,
+porque todavía no existe costo vendido. El P3 actual ejecuta compras; las ventas
+se prueban registrando operaciones con el repositorio existente de Cassandra.
+
+Se toman doce meses calendario hacia atrás desde `fecha_actual` (por defecto,
+ahora en UTC). El 29 de febrero retrocede al 28 de febrero del año anterior.
+Para reconstruir el costo, se leen también las operaciones anteriores al período,
+desde `fechaCreacion` del usuario. Es necesario conservar ese historial completo,
+incluidas las compras iniciales. Las ventas anteriores actualizan la tenencia,
+pero su ganancia no se suma al período solicitado.
+
+El resultado incluye `desde`, `hasta`, `metodo`, `cantidadOperaciones`,
+`importeCompras`, `importeVentas`, `costoVendido`, `gananciaRealizada`,
+`rendimientoPorcentual` y el detalle por símbolo en `instrumentos`.
+Los importes usan `Decimal`, sin redondeos intermedios a centavos. El porcentaje
+total se calcula sobre el costo total vendido; no es un promedio de porcentajes.
+La consulta agrupa todos los portafolios del usuario porque el índice actual de
+Cassandra está organizado por usuario, no por portafolio.
+
+No incluye comisiones, impuestos, dividendos ni ganancias de posiciones abiertas.
+No escribe datos ni requiere saga. Si hay una venta sin compras suficientes,
+datos inválidos o compras y ventas del mismo símbolo con el mismo timestamp,
+informa el error en lugar de inventar el costo. Cassandra guarda milisegundos
+y no permite reconstruir el orden de esas operaciones simultáneas por su UUID.
+Los errores de conexión se propagan; no se devuelven resultados parciales.
+
+```powershell
+# Unitarias, sin bases.
+.\.venv\Scripts\python.exe -m pytest tests/test_p6_historial.py -v
+
+# Integración: MongoDB y Cassandra levantados.
+$env:RUN_P6_INTEGRATION = "1"
+.\.venv\Scripts\python.exe -m pytest tests/test_integracion_p6.py -v
+Remove-Item Env:RUN_P6_INTEGRATION
+```
+
+La integración crea una base MongoDB y un keyspace Cassandra temporales y los
+elimina al terminar. Comprueba aislamiento entre usuarios, filtros, cruces de
+mes y año, límites del período, ganancias, pérdidas y operaciones compensadas.
+El flujo P2 -> P3 -> P4 también verifica que el P6 vea la ejecución del P3.
+El workflow `.github/workflows/test-problema-6.yml` ejecuta las pruebas unitarias
+y de integración en la rama `feature/problema-6` y en las PR hacia `develop`.
