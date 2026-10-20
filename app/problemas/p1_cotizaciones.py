@@ -45,7 +45,9 @@ def publicar_cotizacion(simbolo, compra, venta, ultimo):
         compra,
         venta,
         ultimo,
+        Decimal("100"),
     )
+
 
     # Después actualizamos el precio vigente.
     set_precio(
