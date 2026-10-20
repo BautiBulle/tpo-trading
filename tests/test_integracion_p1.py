@@ -1,5 +1,6 @@
 """Integración del Problema 1: Redis y Cassandra."""
 
+from datetime import timedelta
 from decimal import Decimal
 
 from app.problemas.p1_cotizaciones import (
@@ -28,11 +29,13 @@ def test_publicar_cotizacion_en_redis_y_cassandra():
     assert actual["ultimo"] == Decimal("100.50")
     assert actual["fechaHora"] == cotizacion["fechaHora"]
 
+    
     historico = consultar_precios(
         simbolo,
-        cotizacion["fechaHora"],
-        cotizacion["fechaHora"],
+        cotizacion["fechaHora"] - timedelta(seconds=1),
+        cotizacion["fechaHora"] + timedelta(seconds=1),
     )
+
 
     assert any(
         precio["ultimo"] == Decimal("100.50")
