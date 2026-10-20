@@ -1,0 +1,33 @@
+name: Tests Problema 7
+
+on:
+  push:
+    branches:
+      - develop
+      - feature/problema-7
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Ejecutar pruebas del Problema 7
+        run: |
+          python -m pytest tests/test_p7_riesgo.py -v
