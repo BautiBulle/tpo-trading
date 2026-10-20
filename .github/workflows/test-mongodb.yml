@@ -1,0 +1,70 @@
+name: Pruebas MongoDB
+
+on:
+  push:
+    branches:
+      - feature/mongodb
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      MONGO_HOST: localhost
+      MONGO_PORT: 27017
+      MONGO_DB: trading
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Inicializar replica set
+        run: |
+          docker exec "${{ job.services.mongodb.id }}" \
+            mongosh --quiet --eval \
+            'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+
+      - name: Esperar replica set
+        run: |
+          for i in {1..30}; do
+            if docker exec "${{ job.services.mongodb.id }}" \
+              mongosh --quiet --eval 'rs.status().myState' \
+              | grep -q '^1$'; then
+              echo "Replica set listo"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Replica set no disponible"
+          exit 1
+
+      - name: Inicializar colecciones e indices
+        run: python -m init.mongo_indexes
+
+      - name: Ejecutar pruebas de integracion
+        run: python -m pytest tests/test_integracion_mongodb.py -v
