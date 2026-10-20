@@ -400,3 +400,75 @@ def consultar_auditoria(
         })
 
     return resultados
+
+
+def revertir_operacion(
+    id_operacion: UUID,
+    id_usuario: UUID,
+    id_instrumento: str,
+    fecha_hora: datetime,
+) -> None:
+    """Compensa una operación eliminándola de ambos índices de Cassandra.
+
+    Se puede ejecutar más de una vez: DELETE es idempotente.
+    La saga debe conservar el registro auditable del rollback.
+    """
+
+    if not isinstance(id_operacion, UUID):
+        raise ValueError("id_operacion debe ser UUID")
+
+    if not isinstance(id_usuario, UUID):
+        raise ValueError("id_usuario debe ser UUID")
+
+    if not isinstance(id_instrumento, str) or not id_instrumento.strip():
+        raise ValueError("id_instrumento es obligatorio")
+
+    if not isinstance(fecha_hora, datetime) or fecha_hora.tzinfo is None:
+        raise ValueError("fecha_hora debe incluir zona horaria")
+
+    fecha_hora = fecha_hora.astimezone(timezone.utc)
+
+    mes = fecha_hora.strftime("%Y-%m")
+    dia = fecha_hora.date()
+
+    sesion = get_cassandra()
+
+    borrar_usuario = sesion.prepare("""
+        DELETE FROM operaciones_por_usuario
+        WHERE id_usuario = ?
+          AND mes = ?
+          AND fecha_hora = ?
+          AND id_operacion = ?
+    """)
+
+    borrar_instrumento = sesion.prepare("""
+        DELETE FROM operaciones_por_instrumento
+        WHERE id_instrumento = ?
+          AND dia = ?
+          AND fecha_hora = ?
+          AND id_operacion = ?
+    """)
+
+    # Se intentan ambas eliminaciones. Repetirlas no duplica efectos.
+    errores = []
+
+    try:
+        sesion.execute(
+            borrar_usuario,
+            (id_usuario, mes, fecha_hora, id_operacion),
+        )
+    except Exception as error:
+        errores.append(error)
+
+    try:
+        sesion.execute(
+            borrar_instrumento,
+            (id_instrumento, dia, fecha_hora, id_operacion),
+        )
+    except Exception as error:
+        errores.append(error)
+
+    if errores:
+        raise RuntimeError(
+            "No se pudo completar la compensación en Cassandra"
+        ) from errores[0]
