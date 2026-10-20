@@ -128,8 +128,10 @@ def test_rollback_completo(escenario, falla):
         posicion["cantidad"].to_decimal() == Decimal("0")
     )
 
+    
     assert consultar_saldo(escenario["portafolio"]) == saldo_inicial
-        operaciones = consultar_operaciones_usuario(
+
+    operaciones = consultar_operaciones_usuario(
         escenario["usuario"],
     )
 
