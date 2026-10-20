@@ -38,9 +38,10 @@ def test_publicar_cotizacion_en_redis_y_cassandra():
 
 
     assert any(
-        precio["ultimo"] == Decimal("100.50")
+        precio["precio_ultimo"] == Decimal("100.50")
         for precio in historico
     )
+
 
 
 def test_publicador_actualiza_120_instrumentos():
