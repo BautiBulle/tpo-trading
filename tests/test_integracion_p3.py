@@ -2,8 +2,10 @@
 
 from decimal import Decimal
 from uuid import uuid4
+from app.repos.historial_cass import consultar_operaciones_usuario
 
 import pytest
+
 
 from app.config import get_mongo_db
 from app.problemas.p3_ejecucion import ejecutar_orden_compra
@@ -127,6 +129,14 @@ def test_rollback_completo(escenario, falla):
     )
 
     assert consultar_saldo(escenario["portafolio"]) == saldo_inicial
+        operaciones = consultar_operaciones_usuario(
+        escenario["usuario"],
+    )
+
+    assert not any(
+        str(op["id_operacion"]) == str(id_ejecucion)
+        for op in operaciones
+    )
 
     saga = obtener_saga(id_ejecucion)
 
