@@ -1,12 +1,15 @@
 name: Prueba carga inicial
 
+
 on:
   push:
     branches:
       - feature/seed-datos
+      - feature/problema-1
   pull_request:
     branches:
       - develop
+
 
 jobs:
   carga-inicial:
@@ -127,3 +130,8 @@ jobs:
       - name: Mostrar logs si falla
         if: failure()
         run: docker compose logs --tail=80
+
+        
+      - name: Probar integracion Problema 1
+        run: python -m pytest tests/test_integracion_p1.py -v
+
