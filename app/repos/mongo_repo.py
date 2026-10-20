@@ -438,3 +438,146 @@ def reservar_ejecucion_orden(
 
     return True
 
+
+def confirmar_ejecucion_orden(
+    id_orden: UUID,
+    id_ejecucion: UUID,
+):
+    """Confirma una reserva y actualiza la cantidad ejecutada.
+
+    Retorna False si la ejecución ya estaba confirmada.
+    """
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_ejecucion, "id_ejecucion")
+
+    db = get_mongo_db()
+    identificador = str(id_ejecucion)
+
+    with db.client.start_session() as sesion:
+        with sesion.start_transaction():
+            orden = db.ordenes.find_one(
+                {"_id": str(id_orden)},
+                session=sesion,
+            )
+
+            if orden is None:
+                raise ValueError("La orden no existe")
+
+            confirmadas = orden.get("ejecucionesConfirmadas", [])
+
+            if identificador in confirmadas:
+                return False
+
+            reservas = orden.get("reservasEjecucion", [])
+            reserva = next(
+                (
+                    item for item in reservas
+                    if item["idEjecucion"] == identificador
+                ),
+                None,
+            )
+
+            if reserva is None:
+                raise ValueError(
+                    "No existe una reserva para esta ejecución"
+                )
+
+            cantidad = reserva["cantidad"].to_decimal()
+            ejecutada = orden.get(
+                "cantidadEjecutada",
+                Decimal128(Decimal("0")),
+            ).to_decimal()
+            total = orden["cantidad"].to_decimal()
+
+            nueva_cantidad = ejecutada + cantidad
+
+            if nueva_cantidad > total:
+                raise ValueError(
+                    "La ejecución supera la cantidad de la orden"
+                )
+
+            nuevo_estado = (
+                "EJECUTADA"
+                if nueva_cantidad == total
+                else "PARCIALMENTE_EJECUTADA"
+            )
+
+            resultado = db.ordenes.update_one(
+                {"_id": str(id_orden)},
+                {
+                    "$set": {
+                        "cantidadEjecutada": Decimal128(nueva_cantidad),
+                        "estado": nuevo_estado,
+                        "fechaActualizacion": _fecha_actual(),
+                    },
+                    "$pull": {
+                        "reservasEjecucion": {
+                            "idEjecucion": identificador
+                        }
+                    },
+                    "$addToSet": {
+                        "ejecucionesConfirmadas": identificador
+                    },
+                },
+                session=sesion,
+            )
+
+            if resultado.modified_count != 1:
+                raise RuntimeError(
+                    "No se pudo confirmar la ejecución"
+                )
+
+    return True
+
+
+def liberar_reserva_ejecucion(
+    id_orden: UUID,
+    id_ejecucion: UUID,
+):
+    """Libera una reserva que no llegó a confirmarse.
+
+    Es idempotente: repetir la liberación no modifica la orden.
+    """
+    _validar_uuid(id_orden, "id_orden")
+    _validar_uuid(id_ejecucion, "id_ejecucion")
+
+    db = get_mongo_db()
+    identificador = str(id_ejecucion)
+
+    with db.client.start_session() as sesion:
+        with sesion.start_transaction():
+            orden = db.ordenes.find_one(
+                {"_id": str(id_orden)},
+                session=sesion,
+            )
+
+            if orden is None:
+                raise ValueError("La orden no existe")
+
+            if identificador in orden.get(
+                "ejecucionesConfirmadas", []
+            ):
+                raise ValueError(
+                    "No se puede liberar una ejecución confirmada"
+                )
+
+            resultado = db.ordenes.update_one(
+                {
+                    "_id": str(id_orden),
+                    "reservasEjecucion.idEjecucion": identificador,
+                },
+                {
+                    "$pull": {
+                        "reservasEjecucion": {
+                            "idEjecucion": identificador
+                        }
+                    },
+                    "$set": {
+                        "fechaActualizacion": _fecha_actual()
+                    },
+                },
+                session=sesion,
+            )
+
+    return resultado.modified_count == 1
+
