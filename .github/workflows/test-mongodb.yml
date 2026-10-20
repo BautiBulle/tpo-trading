@@ -12,17 +12,6 @@ jobs:
   pruebas:
     runs-on: ubuntu-latest
 
-    services:
-      mongodb:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
     env:
       MONGO_HOST: localhost
       MONGO_PORT: 27017
@@ -43,24 +32,47 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      - name: Iniciar MongoDB con replica set
+        run: |
+          docker run -d \
+            --name mongodb-test \
+            -p 27017:27017 \
+            mongo:7 \
+            mongod --replSet rs0 --bind_ip_all
+
+      - name: Esperar MongoDB
+        run: |
+          for i in {1..30}; do
+            if docker exec mongodb-test \
+              mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' \
+              | grep -q '^1$'; then
+              echo "MongoDB disponible"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MongoDB no disponible"
+          exit 1
+
       - name: Inicializar replica set
         run: |
-          docker exec "${{ job.services.mongodb.id }}" \
+          docker exec mongodb-test \
             mongosh --quiet --eval \
             'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
 
-      - name: Esperar replica set
+      - name: Esperar nodo PRIMARY
         run: |
           for i in {1..30}; do
-            if docker exec "${{ job.services.mongodb.id }}" \
+            if docker exec mongodb-test \
               mongosh --quiet --eval 'rs.status().myState' \
               | grep -q '^1$'; then
-              echo "Replica set listo"
+              echo "Replica set rs0 listo"
               exit 0
             fi
             sleep 2
           done
           echo "Replica set no disponible"
+          docker logs mongodb-test
           exit 1
 
       - name: Inicializar colecciones e indices
