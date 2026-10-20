@@ -137,13 +137,52 @@ def _ejecutar_movimiento(
                     bloqueado -= importe
                     disponible += importe
 
+                
                 elif tipo == "CONSUMO":
                     if bloqueado < importe:
                         raise ValueError("Saldo bloqueado insuficiente")
                     bloqueado -= importe
 
+                elif tipo == "REVERSION_CONSUMO":
+                    # Solo puede revertirse un consumo real
+                    # correspondiente a la misma ejecución.
+                    cur.execute(
+                        """
+                        SELECT importe, id_portafolio, id_orden
+                        FROM movimiento_saldo
+                        WHERE id_operacion = %s
+                          AND tipo = 'CONSUMO'
+                        """,
+                        (id_operacion,),
+                    )
+
+                    consumo_original = cur.fetchone()
+
+                    if consumo_original is None:
+                        raise ValueError(
+                            "No existe un consumo para revertir"
+                        )
+
+                    importe_original, port_original, orden_original = (
+                        consumo_original
+                    )
+
+                    if (
+                        importe_original != importe
+                        or port_original != id_portafolio
+                        or orden_original != id_orden
+                    ):
+                        raise ValueError(
+                            "La reversión no coincide con el consumo"
+                        )
+
+                    # El consumo había descontado saldo bloqueado.
+                    # La compensación lo devuelve a bloqueado.
+                    bloqueado += importe
+
                 else:
                     raise ValueError("Tipo de movimiento desconocido")
+
 
                 cur.execute(
                     """
@@ -233,3 +272,18 @@ def consultar_saldo(id_portafolio):
         conexion.rollback()
         raise
 
+
+def revertir_consumo(id_portafolio, importe, id_operacion, id_orden):
+    """Revierte un consumo y devuelve fondos al saldo bloqueado.
+
+    Utiliza el mismo id_operacion que el consumo original.
+    La restricción UNIQUE(id_operacion, tipo) garantiza que
+    la compensación no se aplique dos veces.
+    """
+    return _ejecutar_movimiento(
+        id_portafolio,
+        "REVERSION_CONSUMO",
+        importe,
+        id_operacion,
+        id_orden,
+    )
