@@ -45,7 +45,7 @@ def publicar_cotizacion(simbolo, compra, venta, ultimo):
         compra,
         venta,
         ultimo,
-        Decimal("100"),
+        100,
     )
 
 
