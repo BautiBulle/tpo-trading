@@ -43,11 +43,12 @@ def suspender_instrumento(id_instrumento: UUID, id_operador: UUID,
     datos = {"idInstrumento": str(id_instrumento), "idOperador": str(id_operador),
              "motivo": motivo.strip()}
     saga = db.sagas.find_one({"_id": saga_id})
+    fecha_inicio = (saga.get("fechaCreacion") if saga else None) or datetime.now(timezone.utc)
     if saga is None:
         # La saga se registra antes de modificar el instrumento.
         db.sagas.insert_one({"_id": saga_id, "tipo": "SUSPENDER_INSTRUMENTO",
                              "estado": "INICIADA", "datos": datos,
-                             "pasos": [], "fechaCreacion": datetime.now(timezone.utc)})
+                             "pasos": [], "fechaCreacion": fecha_inicio})
     elif saga.get("tipo") != "SUSPENDER_INSTRUMENTO" or saga.get("datos") != datos:
         raise ValueError("Suspensión repetida con datos diferentes")
     elif saga.get("estado") == "COMPLETADA":
@@ -102,7 +103,7 @@ def suspender_instrumento(id_instrumento: UUID, id_operador: UUID,
             raise RuntimeError("Falla simulada de auditoría")
         # Clave estable para que reintentos no dupliquen el evento Cassandra.
         registrar_auditoria(instrumento["simbolo"],
-                           saga.get("fechaCreacion", datetime.now(timezone.utc)) if saga else datetime.now(timezone.utc),
+                           fecha_inicio,
                            id_suspension, "SUSPENSION", motivo.strip(), id_operador)
         confirmacion = db.instrumentos.update_one(
             {"_id": str(id_instrumento), "estado": "EN_SUSPENSION",
@@ -121,6 +122,8 @@ def trazar_orden(id_orden: UUID, margen_segundos: int = 1):
     """Traza una orden y sus ejecuciones confirmadas sin atribuciones por coincidencia temporal."""
     if not isinstance(id_orden, UUID):
         raise ValueError("id_orden debe ser UUID")
+    if not isinstance(margen_segundos, int) or isinstance(margen_segundos, bool) or margen_segundos < 1:
+        raise ValueError("margen_segundos debe ser un entero positivo")
     orden = obtener_orden(id_orden)
     if orden is None:
         raise ValueError("La orden no existe")
@@ -157,6 +160,7 @@ def trazar_orden(id_orden: UUID, margen_segundos: int = 1):
     return {"orden": orden, "instrumento": instrumento,
             "precioVigente": get_precio(simbolo), "ejecuciones": ejecuciones,
             "ejecucionesConfirmadas": sorted(confirmadas),
-            "trazabilidadCompleta": len(ejecuciones) == len(confirmadas),
+            "trazabilidadCompleta": (len(ejecuciones) == len(confirmadas) and
+                all(e["operacionHistorica"] is not None for e in ejecuciones)),
             "posicionActual": obtener_posicion(UUID(orden["idPortafolio"]), UUID(orden["idInstrumento"])),
             "saldoActual": consultar_saldo(UUID(orden["idPortafolio"]))}
