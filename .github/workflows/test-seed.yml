@@ -1,12 +1,15 @@
 name: Prueba carga inicial
 
+
 on:
   push:
     branches:
       - feature/seed-datos
+      - feature/problema-1
   pull_request:
     branches:
       - develop
+
 
 jobs:
   carga-inicial:
