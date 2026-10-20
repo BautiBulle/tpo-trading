@@ -1,5 +1,6 @@
 """Pruebas de integración del Problema 3 con las tres bases."""
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 from app.repos.historial_cass import consultar_operaciones_usuario
@@ -131,9 +132,15 @@ def test_rollback_completo(escenario, falla):
     
     assert consultar_saldo(escenario["portafolio"]) == saldo_inicial
 
+    
+    ahora = datetime.now(timezone.utc)
+
     operaciones = consultar_operaciones_usuario(
         escenario["usuario"],
+        ahora - timedelta(days=1),
+        ahora + timedelta(days=1),
     )
+
 
     assert not any(
         str(op["id_operacion"]) == str(id_ejecucion)
