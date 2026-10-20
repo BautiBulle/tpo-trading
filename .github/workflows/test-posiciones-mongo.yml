@@ -127,6 +127,10 @@ jobs:
       - name: Probar posiciones MongoDB
         run: python -m pytest tests/test_posiciones_mongo.py -v
 
+
+      - name: Probar rollback Cassandra
+        run: python -m pytest tests/test_rollback_cassandra.py -v
+
       
       - name: Mostrar logs si falla
         if: failure()
