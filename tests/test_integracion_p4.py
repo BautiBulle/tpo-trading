@@ -17,6 +17,7 @@ from app.problemas.p2_colocar_orden import colocar_orden_compra
 from app.problemas.p3_ejecucion import ejecutar_orden_compra
 from app.problemas.p4_cancelacion import cancelar_orden, expirar_orden, expirar_ordenes
 from app.problemas.p5_valor_portafolio import calcular_valor_portafolio
+from app.problemas.p6_historial import consultar_historial, calcular_rendimiento_12_meses
 from app.repos.mongo_repo import (
     crear_usuario, crear_portafolio, crear_instrumento, crear_orden, obtener_orden,
     obtener_saga, reservar_ejecucion_orden, tomar_orden_para_cierre,
@@ -146,6 +147,17 @@ def test_flujo_completo_p2_p3_p4(escenario):
         ejecutar_orden_compra(id_orden, Decimal("1"))
         valor_ejecutado = calcular_valor_portafolio(escenario["portafolio"])
         assert valor_ejecutado["valorTotal"] == Decimal("99.50")
+        ahora = datetime.now(timezone.utc)
+        historial = consultar_historial(
+            escenario["usuario"], ahora - timedelta(days=1), ahora,
+            escenario["instrumento"],
+        )
+        assert len(historial) == 1
+        assert historial[0]["cantidad"] == Decimal("1")
+        rendimiento = calcular_rendimiento_12_meses(escenario["usuario"], ahora)
+        assert rendimiento["importeCompras"] == Decimal("100")
+        assert rendimiento["gananciaRealizada"] == Decimal("0")
+        assert rendimiento["rendimientoPorcentual"] is None
         cancelada = cancelar_orden(id_orden)
         assert cancelada["estado"] == "CANCELADA"
         assert cancelada["cantidadEjecutada"] == Decimal("1")
