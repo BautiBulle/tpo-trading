@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS movimiento_saldo (
     id_movimiento UUID PRIMARY KEY,
     id_portafolio UUID NOT NULL REFERENCES saldo,
     tipo          TEXT NOT NULL CHECK (tipo IN
-                    ('DEPOSITO','RETIRO','BLOQUEO','LIBERACION','CONSUMO')),
+                    ('DEPOSITO','RETIRO','BLOQUEO','LIBERACION','CONSUMO','REVERSION_CONSUMO')),
     importe       NUMERIC(18,2) NOT NULL CHECK (importe > 0),
     id_orden      UUID,
     id_operacion  UUID NOT NULL,                       -- idempotencia de la saga
