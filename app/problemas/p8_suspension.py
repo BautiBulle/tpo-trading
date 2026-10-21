@@ -6,6 +6,8 @@ para impedir nuevas compras y permite reanudar con el mismo identificador.
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4, uuid5
 
+from bson.decimal128 import Decimal128
+
 from app.config import get_mongo_db
 from app.problemas.p4_cancelacion import cancelar_orden
 from app.repos.mongo_repo import obtener_instrumento, obtener_orden, obtener_portafolio
@@ -138,14 +140,19 @@ def trazar_orden(id_orden: UUID, margen_segundos: int = 1):
     confirmadas = {str(x) for x in orden.get("ejecucionesConfirmadas", [])}
     ejecuciones = []
     for saga in sagas:
-        datos = saga.get("datos", {})
+        datos = {clave: (valor.to_decimal() if isinstance(valor, Decimal128) else valor)
+                 for clave, valor in saga.get("datos", {}).items()}
         ejecucion_id = datos.get("idEjecucion")
         if not ejecucion_id or str(ejecucion_id) not in confirmadas:
             continue
         fecha = datos.get("fechaHora") or datos.get("fechaEjecucion")
         resultado = {"idEjecucion": str(ejecucion_id), "saga": str(saga["_id"]),
-                     "estadoSaga": saga.get("estado"), "precioHistorico": None,
-                     "operacionHistorica": None}
+                     "estadoSaga": saga.get("estado"), "fechaHora": fecha,
+                     "cantidad": datos.get("cantidad"),
+                     # Precio vigente en Redis al ejecutar (el P3 ejecuta a ese precio).
+                     "precioVigenteAlEjecutar": datos.get("precioVigente") or datos.get("precio"),
+                     "importe": datos.get("importe"),
+                     "precioHistorico": None, "operacionHistorica": None}
         if isinstance(fecha, datetime) and fecha.tzinfo is not None:
             desde = fecha - timedelta(seconds=margen_segundos)
             hasta = fecha + timedelta(seconds=margen_segundos + 1)

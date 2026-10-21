@@ -1,8 +1,13 @@
-"""Problema 3: ejecución total o parcial con compensaciones."""
+"""Problema 3: ejecución total o parcial con compensaciones.
+
+La orden se ejecuta contra el precio vigente (precio de venta en Redis),
+que debe ser menor o igual al precio límite. La orden había reservado
+cantidad x precio límite; cuando se completa, se libera el sobrante.
+"""
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from app.repos.mongo_repo import (
     obtener_orden,
@@ -18,7 +23,45 @@ from app.repos.mongo_repo import (
 )
 from app.repos.posiciones_mongo import aplicar_compra, revertir_compra
 from app.repos.historial_cass import registrar_operacion, revertir_operacion
-from app.repos.saldo_pg import consumir, revertir_consumo
+from app.repos.precios_redis import get_precio
+from app.repos.saldo_pg import consumir, revertir_consumo, liberar_reserva_orden
+
+
+def _precio_ejecucion(simbolo, precio_limite):
+    """Precio vigente al que se ejecuta una compra (precio de venta)."""
+    cotizacion = get_precio(simbolo)
+    if cotizacion is None:
+        raise ValueError(f"No existe cotización vigente para {simbolo}")
+    precio = cotizacion["venta"]
+    if precio > precio_limite:
+        raise ValueError(
+            f"El precio vigente ({precio}) supera el precio límite "
+            f"({precio_limite}): la orden no se ejecuta"
+        )
+    return precio
+
+
+def _liberar_sobrante(id_saga, id_portafolio, id_orden):
+    """Libera lo que quedó bloqueado de una orden ya completada.
+
+    El identificador depende solo de la orden: si dos ejecuciones la ven
+    completa, la liberación se aplica una sola vez.
+    """
+    try:
+        importe = liberar_reserva_orden(
+            id_portafolio, id_orden, uuid5(id_orden, "liberar-sobrante")
+        )
+        registrar_paso_saga(
+            id_saga, "LIBERAR_SOBRANTE", "COMPLETADO", {"importe": importe}
+        )
+        cambiar_estado_saga(id_saga, "COMPLETADA")
+    except Exception as error:
+        # La ejecución ya es válida: no se deshace. Queda pendiente solo
+        # devolver el sobrante, que se reintenta con el mismo id_ejecucion.
+        registrar_paso_saga(
+            id_saga, "LIBERAR_SOBRANTE", "PENDIENTE", {"error": str(error)}
+        )
+        cambiar_estado_saga(id_saga, "LIBERACION_PENDIENTE")
 
 
 def ejecutar_orden_compra(
@@ -27,7 +70,7 @@ def ejecutar_orden_compra(
     id_ejecucion: UUID = None,
     forzar_falla: str = None,
 ):
-    """Ejecuta una compra total o parcial al precio límite.
+    """Ejecuta una compra total o parcial al precio vigente.
 
     forzar_falla:
       'POSICION'  -> falla después de actualizar la posición.
@@ -58,11 +101,7 @@ def ejecutar_orden_compra(
 
     id_portafolio = UUID(orden["idPortafolio"])
     id_instrumento = UUID(orden["idInstrumento"])
-    precio = orden["precioLimite"]
-    importe = (cantidad * precio).quantize(Decimal("0.01"))
-
-    if importe <= 0:
-        raise ValueError("El importe de ejecución debe ser positivo")
+    precio_limite = orden["precioLimite"]
 
     portafolio = obtener_portafolio(id_portafolio)
     instrumento = obtener_instrumento(id_instrumento)
@@ -82,9 +121,18 @@ def ejecutar_orden_compra(
     if saga is not None:
         if saga["estado"] == "COMPLETADA":
             return obtener_orden(id_orden)
+        if saga["estado"] == "LIBERACION_PENDIENTE":
+            _liberar_sobrante(id_saga, id_portafolio, id_orden)
+            return obtener_orden(id_orden)
         raise RuntimeError(
             "La ejecución ya tiene una saga pendiente o fallida"
         )
+
+    precio = _precio_ejecucion(simbolo, precio_limite)
+    importe = (cantidad * precio).quantize(Decimal("0.01"))
+
+    if importe <= 0:
+        raise ValueError("El importe de ejecución debe ser positivo")
 
     crear_saga(
         id_saga,
@@ -98,6 +146,8 @@ def ejecutar_orden_compra(
             "simbolo": simbolo,
             "cantidad": cantidad,
             "precio": precio,
+            "precioLimite": precio_limite,
+            "precioVigente": precio,
             "importe": importe,
             "fechaHora": fecha,
         },
@@ -172,75 +222,94 @@ def ejecutar_orden_compra(
         registrar_paso_saga(
             id_saga, "CONFIRMAR_EJECUCION", "COMPLETADO"
         )
-        cambiar_estado_saga(id_saga, "COMPLETADA")
-
-        return obtener_orden(id_orden)
 
     except Exception:
-        errores_compensacion = []
-
-        # Compensar en orden inverso.
-        if consumo_iniciado:
-            try:
-                revertir_consumo(
-                    id_portafolio,
-                    importe,
-                    id_ejecucion,
-                    id_orden,
-                )
-            except ValueError as error:
-                # Puede no haberse aplicado el consumo.
-                if "No existe un consumo" not in str(error):
-                    errores_compensacion.append(str(error))
-            except Exception as error:
-                errores_compensacion.append(str(error))
-
-        if historial_iniciado:
-            try:
-                revertir_operacion(
-                    id_ejecucion,
-                    id_usuario,
-                    simbolo,
-                    fecha,
-                )
-            except Exception as error:
-                errores_compensacion.append(str(error))
-
-        if posicion_iniciada:
-            try:
-                revertir_compra(id_ejecucion)
-            except Exception as error:
-                errores_compensacion.append(str(error))
-
-        if reserva_iniciada:
-            try:
-                liberar_reserva_ejecucion(
-                    id_orden, id_ejecucion
-                )
-            except Exception as error:
-                errores_compensacion.append(str(error))
-
-        estado = (
-            "REQUIERE_REVISION"
-            if errores_compensacion
-            else "COMPENSADA"
+        _compensar(
+            id_saga, id_orden, id_ejecucion, id_portafolio, id_usuario,
+            simbolo, fecha, importe, reserva_iniciada, posicion_iniciada,
+            historial_iniciado, consumo_iniciado,
         )
-
-        try:
-            registrar_paso_saga(
-                id_saga,
-                "ROLLBACK",
-                estado,
-                {"errores": errores_compensacion},
-            )
-            cambiar_estado_saga(id_saga, estado)
-        except Exception:
-            pass
-
-        if errores_compensacion:
-            raise RuntimeError(
-                "Ejecución fallida con compensación incompleta: "
-                + "; ".join(errores_compensacion)
-            )
-
         raise
+
+    # 6. Si la orden quedó completa, devolver lo bloqueado de más
+    # (se bloqueó al precio límite y se ejecutó a un precio menor o igual).
+    orden_actual = obtener_orden(id_orden)
+    if orden_actual["estado"] == "EJECUTADA":
+        _liberar_sobrante(id_saga, id_portafolio, id_orden)
+        return obtener_orden(id_orden)
+
+    cambiar_estado_saga(id_saga, "COMPLETADA")
+    return orden_actual
+
+
+def _compensar(
+    id_saga, id_orden, id_ejecucion, id_portafolio, id_usuario, simbolo,
+    fecha, importe, reserva_iniciada, posicion_iniciada, historial_iniciado,
+    consumo_iniciado,
+):
+    """Deshace, en orden inverso, los pasos que se llegaron a aplicar."""
+    errores_compensacion = []
+
+    # Compensar en orden inverso.
+    if consumo_iniciado:
+        try:
+            revertir_consumo(
+                id_portafolio,
+                importe,
+                id_ejecucion,
+                id_orden,
+            )
+        except ValueError as error:
+            # Puede no haberse aplicado el consumo.
+            if "No existe un consumo" not in str(error):
+                errores_compensacion.append(str(error))
+        except Exception as error:
+            errores_compensacion.append(str(error))
+
+    if historial_iniciado:
+        try:
+            revertir_operacion(
+                id_ejecucion,
+                id_usuario,
+                simbolo,
+                fecha,
+            )
+        except Exception as error:
+            errores_compensacion.append(str(error))
+
+    if posicion_iniciada:
+        try:
+            revertir_compra(id_ejecucion)
+        except Exception as error:
+            errores_compensacion.append(str(error))
+
+    if reserva_iniciada:
+        try:
+            liberar_reserva_ejecucion(
+                id_orden, id_ejecucion
+            )
+        except Exception as error:
+            errores_compensacion.append(str(error))
+
+    estado = (
+        "REQUIERE_REVISION"
+        if errores_compensacion
+        else "COMPENSADA"
+    )
+
+    try:
+        registrar_paso_saga(
+            id_saga,
+            "ROLLBACK",
+            estado,
+            {"errores": errores_compensacion},
+        )
+        cambiar_estado_saga(id_saga, estado)
+    except Exception:
+        pass
+
+    if errores_compensacion:
+        raise RuntimeError(
+            "Ejecución fallida con compensación incompleta: "
+            + "; ".join(errores_compensacion)
+        )

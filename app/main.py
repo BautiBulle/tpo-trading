@@ -78,12 +78,26 @@ def _p1():
 def _p2():
     from app.problemas.p2_colocar_orden import colocar_orden_compra
 
+    from datetime import timedelta
+
+    portafolio = _uuid("ID del portafolio")
+    instrumento = _uuid("ID del instrumento")
+    cantidad = _decimal("Cantidad")
+    precio = _decimal("Precio límite")
+    id_orden = _uuid("ID de orden (opcional)", opcional=True)
+    minutos = _texto("Vence en N minutos (Enter = al cierre del mercado)")
+    vencimiento = None
+    if minutos:
+        vencimiento = datetime.now(timezone.utc) + timedelta(minutes=int(minutos))
+    falla = _falla(("ORDEN",))
     resultado = colocar_orden_compra(
-        _uuid("ID del portafolio"),
-        _uuid("ID del instrumento"),
-        _decimal("Cantidad"),
-        _decimal("Precio límite"),
-        id_orden=_uuid("ID de orden (opcional)", opcional=True),
+        portafolio,
+        instrumento,
+        cantidad,
+        precio,
+        id_orden=id_orden,
+        fecha_expiracion=vencimiento,
+        forzar_falla=falla,
     )
     _mostrar(resultado)
 

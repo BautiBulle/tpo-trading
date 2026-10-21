@@ -83,3 +83,43 @@ def test_compra_real_con_reserva_de_fondos():
 
     assert saga is not None
     assert saga["estado"] == "COMPLETADA"
+
+
+def test_falla_forzada_libera_el_saldo_bloqueado():
+    from datetime import datetime, timezone
+    from uuid import UUID
+
+    import pytest
+
+    db = get_mongo_db()
+    instrumento = db.instrumentos.find_one({"simbolo": "ACT001"})
+    portafolio = db.portafolios.find_one()
+    id_portafolio = UUID(portafolio["_id"])
+    id_orden = uuid4()
+
+    set_precio(
+        "ACT001",
+        Decimal("99.00"),
+        Decimal("100.00"),
+        Decimal("99.50"),
+        datetime.now(timezone.utc),
+    )
+    saldo_antes = consultar_saldo(id_portafolio)
+
+    with pytest.raises(RuntimeError, match="Falla simulada"):
+        colocar_orden_compra(
+            id_portafolio=id_portafolio,
+            id_instrumento=UUID(instrumento["_id"]),
+            cantidad=Decimal("2"),
+            precio_limite=Decimal("110.00"),
+            id_orden=id_orden,
+            forzar_falla="ORDEN",
+        )
+
+    # El saldo vuelve a quedar como antes y la orden no existe.
+    assert consultar_saldo(id_portafolio) == saldo_antes
+    assert db.ordenes.find_one({"_id": str(id_orden)}) is None
+
+    saga = db.sagas.find_one({"datos.idOrden": str(id_orden)})
+    assert saga["estado"] == "COMPENSADA"
+    assert [paso["paso"] for paso in saga["pasos"]] == ["BLOQUEAR_FONDOS", "LIBERAR_FONDOS"]

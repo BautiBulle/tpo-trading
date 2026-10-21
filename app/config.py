@@ -32,8 +32,6 @@ CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "localhost")
 CASSANDRA_PORT = int(os.getenv("CASSANDRA_PORT", "9042"))
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "tpo_trading")
 
-# Inyección de fallas para la defensa: nombre del paso donde fallar (vacío = no fallar)
-FALLAR_EN = os.getenv("FALLAR_EN", "").strip() or None
 
 
 # ---------- Conexiones ----------
