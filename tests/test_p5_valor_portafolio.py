@@ -65,6 +65,17 @@ def repositorios(contexto):
             "precio": precio,
             "historico": historico,
         }
+        historico.return_value = [{
+            "fecha_hora": FECHA,
+            "precio_ultimo": Decimal("90"),
+        }]
+        yield {
+            "portafolio": portafolio,
+            "posiciones": posiciones,
+            "instrumento": instrumento,
+            "precio": precio,
+            "historico": historico,
+        }
 
 
 def test_valor_usa_ultimo_precio_y_cantidad_fraccionaria(contexto, repositorios):
@@ -226,6 +237,7 @@ def test_sin_historial_rendimiento_no_disponible(contexto, repositorios):
     repositorios["historico"].return_value = []
 
     resultado = calcular_valor_portafolio(contexto["portafolio"])
+
     posicion = resultado["posiciones"][0]
 
     assert posicion["precioReferenciaDiaria"] is None
