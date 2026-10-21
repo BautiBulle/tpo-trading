@@ -17,32 +17,33 @@ from app.repos.precios_redis import set_precio
 FECHA = datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
 
 
-@pytest.fixture(scope="module", autouse=True)
-def base_temporal():
-    if os.getenv("RUN_P5_INTEGRATION") != "1":
-        pytest.skip("Habilitar con RUN_P5_INTEGRATION=1")
-    cliente = config.get_mongo_db().client
-    nombre = "tpo_p5_test_" + uuid4().hex[:12]
-    with pytest.MonkeyPatch.context() as cambios:
-        cambios.setattr(config, "MONGO_DB", nombre)
-        try:
-            yield
-        finally:
-            cliente.drop_database(nombre)
-
-
 @pytest.fixture
 def escenario():
+    from unittest.mock import patch
+
     portafolio = uuid4()
     instrumentos = [uuid4(), uuid4()]
     simbolos = [f"P5-{identificador}" for identificador in instrumentos]
+
     crear_portafolio(portafolio, uuid4())
+
     for identificador, simbolo in zip(instrumentos, simbolos):
         crear_instrumento(identificador, simbolo, "Prueba P5", "TEST")
+
     try:
-        yield {"portafolio": portafolio, "instrumentos": instrumentos, "simbolos": simbolos}
+        with patch(
+            "app.problemas.p5_valor_portafolio.consultar_precios",
+            return_value=[],
+        ):
+            yield {
+                "portafolio": portafolio,
+                "instrumentos": instrumentos,
+                "simbolos": simbolos,
+            }
     finally:
-        config.get_redis().delete(*(f"precio:{simbolo}" for simbolo in simbolos))
+        config.get_redis().delete(
+            *(f"precio:{simbolo}" for simbolo in simbolos)
+        )
 
 
 def cotizar(simbolo, precio, fecha=FECHA):
