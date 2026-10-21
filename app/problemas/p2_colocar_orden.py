@@ -1,7 +1,19 @@
-"""Problema 2: colocación de órdenes de compra con saga compensatoria."""
+"""Problema 2: colocación de órdenes de compra con saga compensatoria.
 
+Orden de escritura:
+  1. PostgreSQL: bloquear el importe (FOR UPDATE: dos órdenes simultáneas
+     del mismo inversor no pueden consumir el mismo saldo).
+  2. MongoDB: registrar la orden.
+Si falla el paso 2, se libera el saldo bloqueado en el paso 1.
+
+La falla del paso 2 se puede provocar con forzar_falla="ORDEN".
+"""
+
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
+
+from app.constantes import cierre_de_mercado
 
 from app.repos.mongo_repo import (
     crear_orden,
@@ -22,12 +34,21 @@ def colocar_orden_compra(
     cantidad: Decimal,
     precio_limite: Decimal,
     id_orden: UUID = None,
+    fecha_expiracion: datetime = None,
+    forzar_falla: str = None,
 ):
     """Coloca una orden de compra reservando fondos mediante una saga.
 
     Devuelve la orden creada.
     Si falla MongoDB después de bloquear fondos, intenta compensar.
+
+    fecha_expiracion: si no se indica, la orden vence al próximo cierre
+    del mercado (las órdenes límite no ejecutadas vencen al cierre).
+    forzar_falla: "ORDEN" simula que falla el registro de la orden en
+    MongoDB después de bloquear el saldo (para demostrar el rollback).
     """
+    if forzar_falla not in (None, "ORDEN"):
+        raise ValueError("Escenario de falla desconocido")
 
     if not isinstance(id_portafolio, UUID):
         raise ValueError("id_portafolio debe ser UUID")
@@ -53,6 +74,17 @@ def colocar_orden_compra(
         id_orden = uuid4()
     elif not isinstance(id_orden, UUID):
         raise ValueError("id_orden debe ser UUID")
+
+    if fecha_expiracion is None:
+        fecha_expiracion = cierre_de_mercado(datetime.now(timezone.utc))
+    elif (
+        not isinstance(fecha_expiracion, datetime)
+        or fecha_expiracion.tzinfo is None
+        or fecha_expiracion.utcoffset() is None
+    ):
+        raise ValueError("fecha_expiracion debe incluir zona horaria")
+    elif fecha_expiracion <= datetime.now(timezone.utc):
+        raise ValueError("La fecha de expiración ya pasó")
 
     # Permite reintentar una orden que ya fue registrada.
     existente = obtener_orden(id_orden)
@@ -107,6 +139,7 @@ def colocar_orden_compra(
             "idPortafolio": id_portafolio,
             "idInstrumento": id_instrumento,
             "importe": importe,
+            "fechaExpiracion": fecha_expiracion,
         },
     )
 
@@ -128,6 +161,11 @@ def colocar_orden_compra(
             {"importe": importe},
         )
 
+        if forzar_falla == "ORDEN":
+            raise RuntimeError(
+                "Falla simulada al registrar la orden en MongoDB"
+            )
+
         crear_orden(
             id_orden,
             id_portafolio,
@@ -135,6 +173,7 @@ def colocar_orden_compra(
             "COMPRA",
             cantidad,
             precio_limite,
+            fecha_expiracion,
         )
 
         registrar_paso_saga(
@@ -159,6 +198,12 @@ def colocar_orden_compra(
                         importe,
                         id_liberacion,
                         id_orden,
+                    )
+                    registrar_paso_saga(
+                        id_saga,
+                        "LIBERAR_FONDOS",
+                        "COMPENSADO",
+                        {"importe": importe},
                     )
                     cambiar_estado_saga(
                         id_saga, "COMPENSADA"
