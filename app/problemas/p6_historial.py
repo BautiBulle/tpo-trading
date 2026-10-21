@@ -103,6 +103,66 @@ def calcular_rendimiento_12_meses(
         detalle.append(resumen)
     _agregar_rendimiento(totales)
 
+    # Desglose de los últimos 12 meses calendario, incluido el actual.
+    inicio_mes_actual = hasta.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+
+    meses = []
+    for desplazamiento in range(11, -1, -1):
+        indice = inicio_mes_actual.year * 12 + inicio_mes_actual.month - 1 - desplazamiento
+        anio, mes_cero = divmod(indice, 12)
+        meses.append(f"{anio:04d}-{mes_cero + 1:02d}")
+
+    rendimiento_mensual = {
+        mes: {
+            "mes": mes,
+            "importeCompras": Decimal("0"),
+            "importeVentas": Decimal("0"),
+            "costoVendido": Decimal("0"),
+            "cantidadOperaciones": 0,
+        }
+        for mes in meses
+    }
+
+    # Se recorre nuevamente el historial para mantener el costo promedio
+    # acumulado, incluso cuando las compras ocurrieron antes del período.
+    posiciones_mensuales = {}
+
+    for operacion in operaciones:
+        simbolo_operacion = operacion["simbolo"]
+
+        if simbolo_operacion not in posiciones_mensuales:
+            posiciones_mensuales[simbolo_operacion] = {
+                "cantidad": Decimal("0"),
+                "costo": Decimal("0"),
+                "ultimaFecha": None,
+                "ultimoTipo": None,
+            }
+
+        costo_vendido = _actualizar_costo(
+            posiciones_mensuales[simbolo_operacion], operacion
+        )
+
+        mes_operacion = operacion["fechaHora"].strftime("%Y-%m")
+
+        if mes_operacion not in rendimiento_mensual:
+            continue
+
+        resumen_mes = rendimiento_mensual[mes_operacion]
+        resumen_mes["cantidadOperaciones"] += 1
+
+        importe = operacion["cantidad"] * operacion["precio"]
+
+        if operacion["tipo"] == "COMPRA":
+            resumen_mes["importeCompras"] += importe
+        else:
+            resumen_mes["importeVentas"] += importe
+            resumen_mes["costoVendido"] += costo_vendido
+
+    for resumen_mes in rendimiento_mensual.values():
+        _agregar_rendimiento(resumen_mes)
+    
     return {
         "idUsuario": str(id_usuario),
         "idInstrumento": str(id_instrumento) if id_instrumento else None,
@@ -111,6 +171,7 @@ def calcular_rendimiento_12_meses(
         "cantidadOperaciones": cantidad_operaciones,
         **totales,
         "instrumentos": detalle,
+        "rendimientoMensual": list(rendimiento_mensual.values()),
     }
 
 
