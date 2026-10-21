@@ -9,7 +9,8 @@ from pymongo import ASCENDING
 
 from app.config import get_mongo_db
 
-COLECCIONES = ["usuarios", "operadores", "instrumentos", "portafolios", "ordenes", "sagas"]
+COLECCIONES = ["usuarios", "operadores", "instrumentos", "portafolios", "ordenes", "sagas",
+               "posiciones", "movimientos_posicion"]
 
 INDICES = {
     "ordenes": [
@@ -22,6 +23,10 @@ INDICES = {
     ],
     "sagas": [
         ([("estado", ASCENDING)], {}),
+        ([("datos.idOrden", ASCENDING)], {}),   # trazabilidad de una orden (P8)
+    ],
+    "posiciones": [
+        ([("idPortafolio", ASCENDING), ("idInstrumento", ASCENDING)], {}),
     ],
 }
 
