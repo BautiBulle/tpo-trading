@@ -164,3 +164,82 @@ def test_reintento_orden_existente(contexto, repositorios):
     assert resultado["estado"] == "PENDIENTE"
     repositorios["bloquear"].assert_not_called()
     repositorios["crear_orden"].assert_not_called()
+
+
+def test_falla_forzada_al_registrar_orden_libera_saldo(contexto, repositorios):
+    repositorios["obtener_orden"].side_effect = [None, None]
+
+    with pytest.raises(RuntimeError, match="Falla simulada"):
+        colocar_orden_compra(
+            contexto["portafolio"],
+            contexto["instrumento"],
+            contexto["cantidad"],
+            contexto["precio"],
+            contexto["orden"],
+            forzar_falla="ORDEN",
+        )
+
+    repositorios["bloquear"].assert_called_once()
+    repositorios["crear_orden"].assert_not_called()
+    repositorios["liberar"].assert_called_once()
+    assert repositorios["liberar"].call_args.args[1] == Decimal("200.00")
+
+    estados = [
+        llamada.args[1]
+        for llamada in repositorios["cambiar_estado"].call_args_list
+    ]
+    assert estados == ["COMPENSADA"]
+
+
+def test_falla_desconocida(contexto, repositorios):
+    with pytest.raises(ValueError, match="Escenario de falla"):
+        colocar_orden_compra(
+            contexto["portafolio"],
+            contexto["instrumento"],
+            contexto["cantidad"],
+            contexto["precio"],
+            contexto["orden"],
+            forzar_falla="OTRA",
+        )
+
+    repositorios["bloquear"].assert_not_called()
+
+
+def test_vence_al_cierre_del_mercado_por_defecto(contexto, repositorios):
+    from datetime import datetime, timezone
+
+    from app.constantes import HORA_CIERRE_MERCADO_UTC
+
+    ejecutar(contexto)
+
+    vencimiento = repositorios["crear_orden"].call_args.args[6]
+    assert vencimiento > datetime.now(timezone.utc)
+    assert vencimiento.hour == HORA_CIERRE_MERCADO_UTC
+    assert vencimiento.minute == 0
+
+
+def test_vencimiento_en_el_pasado_se_rechaza(contexto, repositorios):
+    from datetime import datetime, timedelta, timezone
+
+    with pytest.raises(ValueError, match="ya pasó"):
+        colocar_orden_compra(
+            contexto["portafolio"],
+            contexto["instrumento"],
+            contexto["cantidad"],
+            contexto["precio"],
+            contexto["orden"],
+            fecha_expiracion=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+
+    repositorios["bloquear"].assert_not_called()
+
+
+def test_cierre_de_mercado():
+    from datetime import datetime, timezone
+
+    from app.constantes import cierre_de_mercado
+
+    antes = datetime(2026, 10, 21, 15, 0, tzinfo=timezone.utc)
+    despues = datetime(2026, 10, 21, 21, 0, tzinfo=timezone.utc)
+    assert cierre_de_mercado(antes) == datetime(2026, 10, 21, 20, tzinfo=timezone.utc)
+    assert cierre_de_mercado(despues) == datetime(2026, 10, 22, 20, tzinfo=timezone.utc)

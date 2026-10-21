@@ -18,7 +18,9 @@ from app.repos.mongo_repo import (
     obtener_orden,
     obtener_saga,
 )
+from app.config import get_redis
 from app.repos.posiciones_mongo import obtener_posicion
+from app.repos.precios_redis import set_precio
 from app.repos.saldo_pg import (
     depositar,
     bloquear,
@@ -39,11 +41,21 @@ def escenario():
         f"p3-{usuario}@test.local",
     )
     crear_portafolio(portafolio, usuario)
+    simbolo = f"P3{str(instrumento)[:8]}"
     crear_instrumento(
         instrumento,
-        f"P3{str(instrumento)[:8]}",
+        simbolo,
         "Instrumento prueba P3",
         "TECNOLOGIA",
+    )
+    # Precio vigente igual al límite: la ejecución consume exactamente
+    # lo reservado (los tests de abajo cambian el precio cuando hace falta).
+    set_precio(
+        simbolo,
+        Decimal("99.00"),
+        Decimal("100.00"),
+        Decimal("99.50"),
+        datetime.now(timezone.utc),
     )
     crear_orden(
         orden,
@@ -57,12 +69,15 @@ def escenario():
     depositar(portafolio, Decimal("2000.00"), uuid4())
     bloquear(portafolio, Decimal("1000.00"), uuid4(), orden)
 
-    return {
+    yield {
         "usuario": usuario,
         "portafolio": portafolio,
         "instrumento": instrumento,
         "orden": orden,
+        "simbolo": simbolo,
     }
+
+    get_redis().delete(f"precio:{simbolo}")
 
 
 def test_ejecucion_parcial_y_total(escenario):
@@ -194,3 +209,49 @@ def test_reintento_de_ejecucion_confirmada(escenario):
     saldo = consultar_saldo(escenario["portafolio"])
 
     assert saldo["bloqueado"] == Decimal("800.00")
+
+
+def test_ejecuta_al_precio_vigente_y_libera_el_sobrante(escenario):
+    # Límite 100, pero el precio vigente de venta es 90.
+    set_precio(
+        escenario["simbolo"],
+        Decimal("89.00"),
+        Decimal("90.00"),
+        Decimal("89.50"),
+        datetime.now(timezone.utc),
+    )
+
+    parcial = ejecutar_orden_compra(escenario["orden"], Decimal("4"))
+    assert parcial["estado"] == "PARCIALMENTE_EJECUTADA"
+
+    # Mientras la orden sigue abierta, se mantiene reservado el resto.
+    saldo = consultar_saldo(escenario["portafolio"])
+    assert saldo["bloqueado"] == Decimal("1000.00") - Decimal("360.00")
+
+    total = ejecutar_orden_compra(escenario["orden"], Decimal("6"))
+    assert total["estado"] == "EJECUTADA"
+
+    # Se pagaron 10 x 90 = 900 y se devolvieron los 100 bloqueados de más.
+    saldo = consultar_saldo(escenario["portafolio"])
+    assert saldo["bloqueado"] == Decimal("0.00")
+    assert saldo["disponible"] == Decimal("1100.00")
+
+    posicion = obtener_posicion(escenario["portafolio"], escenario["instrumento"])
+    assert posicion["precioPromedio"].to_decimal() == Decimal("90.00")
+
+
+def test_no_ejecuta_si_el_precio_vigente_supera_el_limite(escenario):
+    set_precio(
+        escenario["simbolo"],
+        Decimal("104.00"),
+        Decimal("105.00"),
+        Decimal("104.50"),
+        datetime.now(timezone.utc),
+    )
+    saldo = consultar_saldo(escenario["portafolio"])
+
+    with pytest.raises(ValueError, match="supera el precio límite"):
+        ejecutar_orden_compra(escenario["orden"], Decimal("1"))
+
+    assert obtener_orden(escenario["orden"])["estado"] == "PENDIENTE"
+    assert consultar_saldo(escenario["portafolio"]) == saldo

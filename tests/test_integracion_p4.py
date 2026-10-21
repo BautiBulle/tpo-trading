@@ -35,6 +35,19 @@ from app.repos.precios_redis import set_precio
 FECHA = datetime(2026, 10, 20, 18, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def precio_vigente_igual_al_limite(monkeypatch):
+    """Estos tests prueban cancelaciones, no precios: el P3 ejecuta al límite.
+
+    Así los importes consumidos son los mismos que se reservaron y las
+    cuentas de saldo de cada test siguen siendo exactas.
+    """
+    monkeypatch.setattr(
+        "app.problemas.p3_ejecucion._precio_ejecucion",
+        lambda simbolo, precio_limite: precio_limite,
+    )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def bases_temporales():
     if os.getenv("RUN_P4_INTEGRATION") != "1":
