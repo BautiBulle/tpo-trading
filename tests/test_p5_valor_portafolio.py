@@ -65,18 +65,7 @@ def repositorios(contexto):
             "precio": precio,
             "historico": historico,
         }
-        historico.return_value = [{
-            "fecha_hora": FECHA,
-            "precio_ultimo": Decimal("90"),
-        }]
-        yield {
-            "portafolio": portafolio,
-            "posiciones": posiciones,
-            "instrumento": instrumento,
-            "precio": precio,
-            "historico": historico,
-        }
-
+      
 
 def test_valor_usa_ultimo_precio_y_cantidad_fraccionaria(contexto, repositorios):
     resultado = calcular_valor_portafolio(contexto["portafolio"])
