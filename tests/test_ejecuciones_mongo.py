@@ -4,8 +4,10 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from app.config import get_mongo_db
 
 from app.repos.mongo_repo import (
+    crear_instrumento,
     crear_orden,
     obtener_orden,
     reservar_ejecucion_orden,
@@ -14,13 +16,36 @@ from app.repos.mongo_repo import (
 )
 
 
-def nueva_orden():
+
+@pytest.fixture
+def limpieza_mongo():
+    """Elimina los documentos creados por cada prueba."""
+    creados = []
+    yield creados
+
+    db = get_mongo_db()
+    for coleccion, identificador in reversed(creados):
+        db[coleccion].delete_one({"_id": str(identificador)})
+
+
+def nueva_orden(limpieza_mongo):
     id_orden = uuid4()
+    id_instrumento = uuid4()
+
+    limpieza_mongo.append(("instrumentos", id_instrumento))
+    limpieza_mongo.append(("ordenes", id_orden))
+
+    crear_instrumento(
+        id_instrumento,
+        f"TEST-{uuid4().hex[:12]}",
+        "Instrumento de prueba",
+        "Tecnologia",
+    )
 
     crear_orden(
         id_orden=id_orden,
         id_portafolio=uuid4(),
-        id_instrumento=uuid4(),
+        id_instrumento=id_instrumento,
         tipo="COMPRA",
         cantidad=Decimal("10"),
         precio_limite=Decimal("100"),
@@ -29,8 +54,8 @@ def nueva_orden():
     return id_orden
 
 
-def test_reservar_y_confirmar_parcial():
-    id_orden = nueva_orden()
+def test_reservar_y_confirmar_parcial(limpieza_mongo):
+    id_orden = nueva_orden(limpieza_mongo)
     id_ejecucion = uuid4()
 
     assert reservar_ejecucion_orden(
@@ -47,8 +72,8 @@ def test_reservar_y_confirmar_parcial():
     assert orden["estado"] == "PARCIALMENTE_EJECUTADA"
 
 
-def test_completar_orden_con_segunda_ejecucion():
-    id_orden = nueva_orden()
+def test_completar_orden_con_segunda_ejecucion(limpieza_mongo):
+    id_orden = nueva_orden(limpieza_mongo)
 
     primera = uuid4()
     segunda = uuid4()
@@ -69,8 +94,8 @@ def test_completar_orden_con_segunda_ejecucion():
     assert orden["estado"] == "EJECUTADA"
 
 
-def test_no_permitir_sobre_ejecucion():
-    id_orden = nueva_orden()
+def test_no_permitir_sobre_ejecucion(limpieza_mongo):
+    id_orden = nueva_orden(limpieza_mongo)
 
     reservar_ejecucion_orden(
         id_orden, uuid4(), Decimal("7")
@@ -82,8 +107,8 @@ def test_no_permitir_sobre_ejecucion():
         )
 
 
-def test_liberar_reserva():
-    id_orden = nueva_orden()
+def test_liberar_reserva(limpieza_mongo):
+    id_orden = nueva_orden(limpieza_mongo)
     id_ejecucion = uuid4()
 
     reservar_ejecucion_orden(
@@ -109,8 +134,8 @@ def test_liberar_reserva():
     ) is True
 
 
-def test_confirmacion_idempotente():
-    id_orden = nueva_orden()
+def test_confirmacion_idempotente(limpieza_mongo):
+    id_orden = nueva_orden(limpieza_mongo)
     id_ejecucion = uuid4()
 
     reservar_ejecucion_orden(
@@ -130,8 +155,8 @@ def test_confirmacion_idempotente():
     assert orden["cantidadEjecutada"] == Decimal("3")
 
 
-def test_no_liberar_ejecucion_confirmada():
-    id_orden = nueva_orden()
+def test_no_liberar_ejecucion_confirmada(limpieza_mongo):
+    id_orden = nueva_orden(limpieza_mongo)
     id_ejecucion = uuid4()
 
     reservar_ejecucion_orden(

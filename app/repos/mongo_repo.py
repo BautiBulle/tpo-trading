@@ -206,6 +206,7 @@ def obtener_portafolio(id_portafolio):
 
 # ---------- Órdenes ----------
 
+
 def crear_orden(
     id_orden,
     id_portafolio,
@@ -215,7 +216,11 @@ def crear_orden(
     precio_limite,
     fecha_expiracion=None,
 ):
-    """Registra una orden pendiente de procesamiento."""
+    """Crea una orden solo si el instrumento continúa ACTIVO.
+
+    La lectura y escritura del instrumento, junto con la inserción
+    de la orden, se realizan en una transacción MongoDB.
+    """
     _validar_uuid(id_orden, "id_orden")
     _validar_uuid(id_portafolio, "id_portafolio")
     _validar_uuid(id_instrumento, "id_instrumento")
@@ -239,21 +244,47 @@ def crear_orden(
                 "fecha_expiracion debe incluir zona horaria"
             )
 
-    return guardar_documento(
-        "ordenes",
-        {
-            "_id": id_orden,
-            "idPortafolio": str(id_portafolio),
-            "idInstrumento": str(id_instrumento),
-            "tipo": tipo,
-            "cantidad": cantidad,
-            "precioLimite": precio_limite,
-            "estado": "PENDIENTE",
-            "cantidadEjecutada": Decimal128(Decimal("0")),
-            "fechaCreacion": _fecha_actual(),
-            "fechaExpiracion": fecha_expiracion,
-        },
-    )
+    db = get_mongo_db()
+
+    documento = _preparar_documento({
+        "_id": id_orden,
+        "idPortafolio": str(id_portafolio),
+        "idInstrumento": str(id_instrumento),
+        "tipo": tipo,
+        "cantidad": cantidad,
+        "precioLimite": precio_limite,
+        "estado": "PENDIENTE",
+        "cantidadEjecutada": Decimal("0"),
+        "fechaCreacion": _fecha_actual(),
+        "fechaExpiracion": fecha_expiracion,
+    })
+
+    with db.client.start_session() as sesion:
+        with sesion.start_transaction():
+            # Escribir sobre el mismo documento que modifica P8
+            # fuerza un conflicto transaccional si ambas operaciones
+            # intentan avanzar simultáneamente.
+            instrumento = db.instrumentos.find_one_and_update(
+                {
+                    "_id": str(id_instrumento),
+                    "estado": "ACTIVO",
+                },
+                {
+                    "$set": {
+                        "fechaUltimaValidacionOrden": _fecha_actual()
+                    }
+                },
+                session=sesion,
+            )
+
+            if instrumento is None:
+                raise ValueError(
+                    "El instrumento no existe o no está activo"
+                )
+
+            db.ordenes.insert_one(documento, session=sesion)
+
+    return documento["_id"]
 
 
 def obtener_orden(id_orden):
