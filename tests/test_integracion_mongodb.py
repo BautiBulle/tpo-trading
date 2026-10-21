@@ -89,14 +89,25 @@ def test_crear_y_obtener_portafolio(limpieza):
     assert portafolio["posiciones"] == []
 
 
+
 def test_crear_y_obtener_orden(limpieza):
     identificador = uuid4()
+    id_instrumento = uuid4()
+
     limpieza.append(("ordenes", identificador))
+    limpieza.append(("instrumentos", id_instrumento))
+
+    crear_instrumento(
+        id_instrumento,
+        f"TEST-{uuid4().hex[:12]}",
+        "Empresa Prueba",
+        "Tecnologia",
+    )
 
     crear_orden(
         identificador,
         uuid4(),
-        uuid4(),
+        id_instrumento,
         "COMPRA",
         Decimal("10"),
         Decimal("150.50"),
@@ -111,10 +122,20 @@ def test_crear_y_obtener_orden(limpieza):
 
 def test_cambiar_estado_orden(limpieza):
     identificador = uuid4()
+    id_instrumento = uuid4()
+
     limpieza.append(("ordenes", identificador))
+    limpieza.append(("instrumentos", id_instrumento))
+
+    crear_instrumento(
+        id_instrumento,
+        f"TEST-{uuid4().hex[:12]}",
+        "Empresa Prueba",
+        "Tecnologia",
+    )
 
     crear_orden(
-        identificador, uuid4(), uuid4(),
+        identificador, uuid4(), id_instrumento,
         "COMPRA", Decimal("2"), Decimal("100"),
     )
 
@@ -124,7 +145,6 @@ def test_cambiar_estado_orden(limpieza):
 
     assert resultado["estado"] == "EJECUTADA"
 
-    # El estado anterior ya no coincide.
     segundo = cambiar_estado_orden(
         identificador, "PENDIENTE", "CANCELADA"
     )
@@ -134,10 +154,20 @@ def test_cambiar_estado_orden(limpieza):
 def test_listar_ordenes_portafolio(limpieza):
     portafolio = uuid4()
     orden = uuid4()
+    id_instrumento = uuid4()
+
     limpieza.append(("ordenes", orden))
+    limpieza.append(("instrumentos", id_instrumento))
+
+    crear_instrumento(
+        id_instrumento,
+        f"TEST-{uuid4().hex[:12]}",
+        "Empresa Prueba",
+        "Tecnologia",
+    )
 
     crear_orden(
-        orden, portafolio, uuid4(),
+        orden, portafolio, id_instrumento,
         "COMPRA", Decimal("1"), Decimal("50"),
     )
 
