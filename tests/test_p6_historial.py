@@ -223,6 +223,86 @@ def test_datos_invalidos_no_producen_rendimiento(repositorios, campo, valor):
     with pytest.raises(ValueError, match="inválid"):
         calcular_rendimiento_12_meses(USUARIO, HASTA)
 
+def test_rendimiento_mensual_devuelve_12_meses_ordenados(repositorios):
+    resultado = calcular_rendimiento_12_meses(USUARIO, HASTA)
+
+    meses = resultado["rendimientoMensual"]
+
+    assert len(meses) == 12
+    assert [fila["mes"] for fila in meses] == [
+        "2025-11", "2025-12",
+        "2026-01", "2026-02", "2026-03", "2026-04",
+        "2026-05", "2026-06", "2026-07", "2026-08",
+        "2026-09", "2026-10",
+    ]
+
+    for fila in meses:
+        assert fila["cantidadOperaciones"] == 0
+        assert fila["gananciaRealizada"] == Decimal("0")
+        assert fila["rendimientoPorcentual"] is None
+
+
+def test_rendimiento_mensual_distribuye_ventas_por_mes(repositorios):
+    repositorios["historial"].return_value = [
+        operacion("COMPRA", "10", "100", datetime(2025, 10, 10, tzinfo=timezone.utc)),
+        operacion("VENTA", "2", "150", datetime(2025, 11, 10, tzinfo=timezone.utc)),
+        operacion("VENTA", "3", "80", datetime(2026, 1, 10, tzinfo=timezone.utc)),
+    ]
+
+    resultado = calcular_rendimiento_12_meses(USUARIO, HASTA)
+    meses = {
+        fila["mes"]: fila
+        for fila in resultado["rendimientoMensual"]
+    }
+
+    noviembre = meses["2025-11"]
+    assert noviembre["importeVentas"] == Decimal("300")
+    assert noviembre["costoVendido"] == Decimal("200")
+    assert noviembre["gananciaRealizada"] == Decimal("100")
+    assert noviembre["rendimientoPorcentual"] == Decimal("50")
+
+    enero = meses["2026-01"]
+    assert enero["importeVentas"] == Decimal("240")
+    assert enero["costoVendido"] == Decimal("300")
+    assert enero["gananciaRealizada"] == Decimal("-60")
+    assert enero["rendimientoPorcentual"] == Decimal("-20")
+
+    assert meses["2025-12"]["gananciaRealizada"] == Decimal("0")
+    assert meses["2025-12"]["rendimientoPorcentual"] is None
+
+
+def test_rendimiento_mensual_conserva_costo_promedio_de_meses_anteriores(repositorios):
+    repositorios["historial"].return_value = [
+        operacion("COMPRA", "5", "100", datetime(2025, 8, 10, tzinfo=timezone.utc)),
+        operacion("COMPRA", "5", "200", datetime(2025, 12, 10, tzinfo=timezone.utc)),
+        operacion("VENTA", "2", "180", datetime(2026, 2, 10, tzinfo=timezone.utc)),
+    ]
+
+    resultado = calcular_rendimiento_12_meses(USUARIO, HASTA)
+    febrero = next(
+        fila for fila in resultado["rendimientoMensual"]
+        if fila["mes"] == "2026-02"
+    )
+
+    assert febrero["costoVendido"] == Decimal("300")
+    assert febrero["gananciaRealizada"] == Decimal("60")
+    assert febrero["rendimientoPorcentual"] == Decimal("20")
+
+
+def test_rendimiento_mensual_no_incluye_operaciones_futuras(repositorios):
+    repositorios["historial"].return_value = [
+        operacion("COMPRA", "1", "100", datetime(2026, 10, 1, tzinfo=timezone.utc)),
+    ]
+
+    resultado = calcular_rendimiento_12_meses(USUARIO, HASTA)
+    octubre = resultado["rendimientoMensual"][-1]
+
+    assert octubre["mes"] == "2026-10"
+    assert octubre["cantidadOperaciones"] == 1
+    assert octubre["importeCompras"] == Decimal("100")
+    assert octubre["gananciaRealizada"] == Decimal("0")
+    assert octubre["rendimientoPorcentual"] is None
+
 
 def test_error_cassandra_no_devuelve_resultado_parcial(repositorios):
     repositorios["historial"].side_effect = RuntimeError("Cassandra no disponible")
