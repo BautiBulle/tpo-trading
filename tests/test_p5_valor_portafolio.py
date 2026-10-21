@@ -26,6 +26,7 @@ def repositorios(contexto):
         patch(f"{modulo}.listar_posiciones_portafolio") as posiciones,
         patch(f"{modulo}.obtener_instrumento") as instrumento,
         patch(f"{modulo}.get_precio") as precio,
+        patch(f"{modulo}.consultar_precios") as historico,
     ):
         portafolio.return_value = {"_id": str(contexto["portafolio"]), "posiciones": []}
         posiciones.return_value = [{
@@ -39,8 +40,17 @@ def repositorios(contexto):
             "compra": Decimal("99"), "venta": Decimal("101"),
             "ultimo": Decimal("100"), "fechaHora": FECHA,
         }
-        yield {"portafolio": portafolio, "posiciones": posiciones,
-               "instrumento": instrumento, "precio": precio}
+        historico.return_value = [{
+            "fecha_hora": FECHA,
+            "precio_ultimo": Decimal("90"),
+        }]
+        yield {
+            "portafolio": portafolio,
+            "posiciones": posiciones,
+            "instrumento": instrumento,
+            "precio": precio,
+            "historico": historico,
+        }
 
 
 def test_valor_usa_ultimo_precio_y_cantidad_fraccionaria(contexto, repositorios):
@@ -48,9 +58,15 @@ def test_valor_usa_ultimo_precio_y_cantidad_fraccionaria(contexto, repositorios)
     assert resultado["idPortafolio"] == str(contexto["portafolio"])
     assert resultado["valorTotal"] == Decimal("250.00")
     assert resultado["posiciones"] == [{
-        "idInstrumento": str(contexto["instrumento"]), "simbolo": "ACT001",
-        "cantidad": Decimal("2.5"), "precioActual": Decimal("100"),
-        "valorActual": Decimal("250.00"), "fechaCotizacion": FECHA,
+        "idInstrumento": str(contexto["instrumento"]),
+        "simbolo": "ACT001",
+        "cantidad": Decimal("2.5"),
+        "precioActual": Decimal("100"),
+        "valorActual": Decimal("250.00"),
+        "fechaCotizacion": FECHA,
+        "precioReferenciaDiaria": Decimal("90"),
+        "fechaReferenciaDiaria": FECHA,
+        "rendimientoDiarioPorcentaje": Decimal("100") / Decimal("9"),
     }]
     assert resultado["fechaConsulta"].tzinfo == timezone.utc
 
@@ -153,3 +169,16 @@ def test_error_redis_se_propaga(contexto, repositorios):
     repositorios["precio"].side_effect = ConnectionError("Redis no disponible")
     with pytest.raises(ConnectionError, match="Redis no disponible"):
         calcular_valor_portafolio(contexto["portafolio"])
+
+
+def test_sin_historial_rendimiento_no_disponible(contexto, repositorios):
+    repositorios["historico"].return_value = []
+
+    resultado = calcular_valor_portafolio(contexto["portafolio"])
+
+    posicion = resultado["posiciones"][0]
+
+    assert posicion["precioReferenciaDiaria"] is None
+    assert posicion["fechaReferenciaDiaria"] is None
+    assert posicion["rendimientoDiarioPorcentaje"] is None
+    assert resultado["valorTotal"] == Decimal("250.00")
